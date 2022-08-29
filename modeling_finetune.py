@@ -192,7 +192,8 @@ class VisionTransformer(nn.Module):
                  init_scale=0.,
                  all_frames=16,
                  tubelet_size=2,
-                 use_mean_pooling=True):
+                 use_mean_pooling=True,
+                 pretrained_cfg = None):
         super().__init__()
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
@@ -288,7 +289,7 @@ def vit_base_patch16_224(pretrained=False, **kwargs):
     model = VisionTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
+    #model.default_cfg = _cfg()
     return model
 
 
