@@ -3,6 +3,7 @@ import datetime
 import numpy as np
 import time
 import torch
+import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import json
 import os
@@ -106,6 +107,8 @@ def get_args():
                          help='Perform evaluation only')
      parser.add_argument('--dist_eval', action='store_true', default=False,
                          help='Enabling distributed evaluation')
+     parser.add_argument('--extract', action='store_true',
+                         help='Perform feature extract only')
      parser.add_argument('--num_workers', default=10, type=int)
      parser.add_argument('--pin_mem', action='store_true',
                          help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
@@ -138,7 +141,7 @@ def get_args():
      return parser.parse_args(), ds_init
 
 def main(args, ds_init):
-     utils.init_distributed_mode(args)
+     extract_path = '/data/dongho/repos/videomae/VideoMAE/extract_feature/norm_pooling'
      
      print(args)
      
@@ -151,30 +154,29 @@ def main(args, ds_init):
      
      cudnn.benchmark = True
      
-     dataset_test, _ = build_dataset(is_train=False, test_mode=True, args=args)
+     dataset_test, _ = build_dataset(is_train=False, test_mode=False, args=args)
      
      num_tasks = utils.get_world_size()
      global_rank = utils.get_rank()
      
-     if args.dist_eval:
-          sampler_test = torch.utils.data.DistributedSampler(
-               dataset_test, num_replicas=num_tasks, rank=global_rank, shuffle=False
-          )
+
      
      if global_rank == 0 and args.log_dir is not None:
           os.makedirs(args.log_dir, exist_ok = True)
           log_writer = utils.TensorboardLogger(log_dir = args.log_dir)
      else:
           log_writer = None
-
-     dataset_loader_test = torch.utils.data.DataLoader(
-          dataset_test, sampler = sampler_test,
+          
+     # define DataLoader
+     dataset_loader_train = torch.utils.data.DataLoader(
+          dataset_test,
           batch_size = args.batch_size,
           num_workers = args.num_workers,
           pin_memory = args.pin_mem,
           drop_last = False
      )
      
+     # create model.
      model = create_model(
           args.model,
           pretrained=False,
@@ -188,7 +190,9 @@ def main(args, ds_init):
           use_mean_pooling=args.use_mean_pooling,
           init_scale=args.init_scale,
      )
+     model.head = nn.Identity()
 
+     # load pre_trained weight and apply
      patch_size = model.patch_embed.patch_size
      print("Patch size = %s"% str(patch_size))
      args.window_size = (args.num_frames // 2, args.input_size // patch_size[0], args.input_size // patch_size[1])
@@ -207,12 +211,10 @@ def main(args, ds_init):
                checkpoint_model = checkpoint
           state_dict = model.state_dict()
           
-          # pre-trained weight를 checkpoint_model의 head가 state_dict(그러니까 모델 선언하고 random initialize되어있는
-          # 놈과 shape이 안맞는다면 그냥 지워버린다는 코드다)
+          # feature extract를 위해 head는 여기서 지워준다.
           for k in ['head.weight', 'head.bias']:
-               if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
-                    print(f"Removing key {k} from pretrained checkpoint")
-                    del checkpoint_model[k]
+               print(f"Removing key {k} from pretrained checkpoint")
+               del checkpoint_model[k]
                     
           all_keys = list(checkpoint_model.keys())
           new_dict = OrderedDict()
@@ -237,17 +239,8 @@ def main(args, ds_init):
           utils.load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
      
      model.to(device)
-     model_ema = None
-     if args.model_ema:
-          model_ema = ModelEma(
-               model,
-               decay=args.model_ema_decay,
-               device='cpu' if args.model_ema_force_cpu else '',
-               resume=''
-          )
-          print("Using EMA with decay = %.8f"% args.model_ema_decay)
-     
      model_without_ddp = model
+     
      n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
      
      print("Model = %s" % str(model_without_ddp))
@@ -256,30 +249,27 @@ def main(args, ds_init):
      num_layers = model_without_ddp.get_num_layers()
      assigner = None
      
-     if assigner is not None:
-          print("Assigned values = %s" % str(assigner.values))
+     # engine_for_finetuning > validation_one_epoch 참조하여 작성.
+     with torch.no_grad():
+          metric_logger = utils.MetricLogger(delimiter="  ")
+          header = 'extract'
+          # eval mode로 변경
+          model.eval()
           
-     if args.distributed:
-          model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
-          model_without_ddp = model.module
-     
-     if args.eval:
-          preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
-          test_stats = final_test(dataset_loader_test, model, device, preds_file)
-          torch.distributed.barrier()
-          if global_rank == 0:
-               print("start merging results...")
-               final_top1, final_top5 = merge(args.output_dir, num_tasks)
-               print(f"Accuracy of the network on the {len(dataset_test)} test videos: Top-1: {final_top1:.2f}%, Top-5: {final_top5:.2f}%")
-               log_stats = {'Final top-1': final_top1,'Final Top-5': final_top5}
-               if args.output_dir and utils.is_main_process():
-                    with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
-                         f.write(json.dumps(log_stats) + "\n")
-          exit(0)
+          for batch in metric_logger.log_every(dataset_loader_train, 10, header):
+               videos = batch[0].to(device)
+               target = batch[1]
+               file_names = batch[2]
+               
+               #comput output
+               with torch.cuda.amp.autocast():
+                    output = model(videos)
+               output = output.cpu().numpy()
+               for i, one_file in enumerate(file_names):
+                    save_filename = os.path.join(extract_path, one_file)
+                    np.save(save_filename + '.npy', output[i])
+                    
 
-
-
-          
 if __name__ == '__main__':
     opts, ds_init = get_args()
     if opts.output_dir:

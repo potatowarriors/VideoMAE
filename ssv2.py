@@ -1,4 +1,5 @@
 import os
+from statistics import NormalDist
 import numpy as np
 import torch
 from torchvision import transforms
@@ -47,6 +48,15 @@ class SSVideoClsDataset(Dataset):
 
         if (mode == 'train'):
             pass
+        
+        elif (mode == 'extract'):
+            self.data_transform = video_transforms.Compose([
+                video_transforms.Resize(self.short_side_size, interpolation='bilinear'),
+                video_transforms.CenterCrop(size=(self.crop_size, self.crop_size)),
+                volume_transforms.ClipToTensor(),
+                video_transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                        std=[0.229, 0.224, 0.225])
+            ])
 
         elif (mode == 'validation'):
             self.data_transform = video_transforms.Compose([
@@ -105,6 +115,18 @@ class SSVideoClsDataset(Dataset):
                 buffer = self._aug_frame(buffer, args)
             
             return buffer, self.label_array[index], index, {}
+        
+        elif self.mode == 'extract':
+            sample = self.dataset_samples[index]
+            buffer = self.loadvideo_decord(sample)
+            if len(buffer) == 0:
+                while len(buffer) == 0:
+                    warnings.warn("video {} not correctly loaded during validation".format(sample))
+                    index = np.random.randint(self.__len__())
+                    sample = self.dataset_samples[index]
+                    buffer = self.loadvideo_decord(sample)
+            buffer = self.data_transform(buffer)
+            return buffer, self.label_array[index], sample.split("/")[-1].split(".")[0]
 
         elif self.mode == 'validation':
             sample = self.dataset_samples[index]
