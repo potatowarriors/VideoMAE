@@ -92,9 +92,14 @@ def build_dataset(is_train, test_mode, args):
         if is_train is True:
             mode = 'train'
             anno_path = os.path.join(args.data_path, 'train.csv')
+        # feature extract를 위해 수정한 부분.
         elif args.extract is True:
             mode = 'extract'
             anno_path = os.path.join(args.data_path, 'train.csv')
+        elif args.extract_clip is True:
+            mode = 'extract_clip'
+            anno_path = os.path.join(args.data_path, 'train.csv')
+        
         elif test_mode is True:
             mode = 'test'
             anno_path = os.path.join(args.data_path, 'test.csv') 

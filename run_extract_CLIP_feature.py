@@ -11,18 +11,10 @@ from functools import partial
 from pathlib import Path
 from collections import OrderedDict
 
-from mixup import Mixup
-from timm.models import create_model
-from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
-from timm.utils import ModelEma
-from optim_factory import create_optimizer, get_parameter_groups, LayerDecayValueAssigner
+import clip
 
 from datasets import build_dataset
-from engine_for_finetuning import train_one_epoch, validation_one_epoch, final_test, merge
-from utils import NativeScalerWithGradNormCount as NativeScaler
-from utils import  multiple_samples_collate
 import utils
-import modeling_finetune
 
 def get_args():
      parser = argparse.ArgumentParser('VideoMAE evaluation script for video classification', add_help=False)
@@ -109,6 +101,7 @@ def get_args():
                          help='Enabling distributed evaluation')
      parser.add_argument('--extract', action='store_true',
                          help='Perform feature extract only')
+     parser.add_argument('--extract_clip', action= 'store_true')
      parser.add_argument('--num_workers', default=10, type=int)
      parser.add_argument('--pin_mem', action='store_true',
                          help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
@@ -141,7 +134,7 @@ def get_args():
      return parser.parse_args(), ds_init
 
 def main(args, ds_init):
-     extract_path = '/data/dataset/something-something/extracted_feature_ssv2/extract_feature/all_patch'
+     extract_path = '/data/dataset/something-something/extracted_clip_feature_ssv2'
      
      print(args)
      
@@ -168,7 +161,7 @@ def main(args, ds_init):
           log_writer = None
           
      # define DataLoader
-     dataset_loader_train = torch.utils.data.DataLoader(
+     dataset_loader_extract = torch.utils.data.DataLoader(
           dataset_extract,
           batch_size = args.batch_size,
           num_workers = args.num_workers,
@@ -177,93 +170,21 @@ def main(args, ds_init):
      )
      
      # create model.
-     model = create_model(
-          args.model,
-          pretrained=False,
-          num_classes=args.nb_classes,
-          all_frames=args.num_frames * args.num_segments,
-          tubelet_size = args.tubelet_size,
-          drop_rate=args.drop,
-          drop_path_rate=args.drop_path,
-          attn_drop_rate=args.attn_drop_rate,
-          drop_block_rate=None,
-          use_mean_pooling=args.use_mean_pooling,
-          init_scale=args.init_scale,
-     )
-     model.head = nn.Identity()
-
-     # load pre_trained weight and apply
-     patch_size = model.patch_embed.patch_size
-     print("Patch size = %s"% str(patch_size))
-     args.window_size = (args.num_frames // 2, args.input_size // patch_size[0], args.input_size // patch_size[1])
-     args.patch_size = patch_size
-     
-     if args.finetune:
-          checkpoint = torch.load(args.finetune, map_location='cpu')
-          print("Load ckpt from %s" % args.finetune)
-          checkpoint_model = None
-          for model_key in args.model_key.split('|'):
-               if model_key in checkpoint:
-                    checkpoint_model = checkpoint[model_key]
-                    print("Load state_dict by model_key = %s" % model_key)
-                    break
-          if checkpoint_model is None:
-               checkpoint_model = checkpoint
-          state_dict = model.state_dict()
-          
-          # feature extract를 위해 head는 여기서 지워준다.
-          for k in ['head.weight', 'head.bias']:
-               print(f"Removing key {k} from pretrained checkpoint")
-               del checkpoint_model[k]
-                    
-          all_keys = list(checkpoint_model.keys())
-          new_dict = OrderedDict()
-          for key in all_keys:
-               if key.startswith('backbone.'):
-                    new_dict[key[9:]] = checkpoint_model[key]
-               elif key.startswith('encoder.'):
-                    new_dict[key[8:]] = checkpoint_model[key]
-               else:
-                    new_dict[key] = checkpoint_model[key]
-          checkpoint_model = new_dict
-          
-          # interpolate position embedding
-          if 'pos_embed' in checkpoint_model:
-               pos_embed_checkpoint = checkpoint_model['pos_embed']
-               embedding_size = pos_embed_checkpoint.shape[-1] # channel dim
-               num_patches = model.patch_embed.num_patches
-               num_extra_tokens = model.pos_embed.shape[-2] - num_patches # class tokken check
-               
-               # height(==width) for the checkpoint position embedding
-               org_size = int(((pos_embed_checkpoint.shape[-2])))
-          utils.load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
-     
-     model.to(device)
-     model_without_ddp = model
-     
-     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-     
-     print("Model = %s" % str(model_without_ddp))
-     print('number of params:', n_parameters)
-     
-     num_layers = model_without_ddp.get_num_layers()
-     assigner = None
+     model, _ = clip.load("ViT-B/32", device=device)
      
      # engine_for_finetuning > validation_one_epoch 참조하여 작성.
      with torch.no_grad():
           metric_logger = utils.MetricLogger(delimiter="  ")
-          header = 'extract'
-          # eval mode로 변경
-          model.eval()
+          header = 'extract_clip'
           
-          for batch in metric_logger.log_every(dataset_loader_train, 10, header):
-               videos = batch[0].to(device)
-               target = batch[1]
+          for batch in metric_logger.log_every(dataset_loader_extract, 10, header):
+               videos = batch[0]
+               # center frame만 골라낸다.
+               center_frame = videos[:, :, 8, :, :].to(device)
                file_names = batch[2]
                
                #comput output
-               with torch.cuda.amp.autocast():
-                    output = model(videos)
+               output = model.encode_image(center_frame)
                output = output.cpu().numpy()
                for i, one_file in enumerate(file_names):
                     save_filename = os.path.join(extract_path, one_file)

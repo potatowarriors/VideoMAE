@@ -266,6 +266,7 @@ class VisionTransformer(nn.Module):
             x = blk(x)
 
         x = self.norm(x)
+        # mean pooling 관련 코드
         if self.fc_norm is not None:
             return self.fc_norm(x.mean(1))
         else:

@@ -49,6 +49,7 @@ class SSVideoClsDataset(Dataset):
         if (mode == 'train'):
             pass
         
+        # feature extract를 위해 code 수정.
         elif (mode == 'extract'):
             self.data_transform = video_transforms.Compose([
                 video_transforms.Resize(self.short_side_size, interpolation='bilinear'),
@@ -56,6 +57,15 @@ class SSVideoClsDataset(Dataset):
                 volume_transforms.ClipToTensor(),
                 video_transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                         std=[0.229, 0.224, 0.225])
+            ])
+            
+        elif (mode == 'extract_clip'):
+            self.data_transform = video_transforms.Compose([
+                video_transforms.Resize(self.short_side_size, interpolation='bilinear'),
+                video_transforms.CenterCrop(size=(self.crop_size, self.crop_size)),
+                volume_transforms.ClipToTensor(),
+                video_transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], # CLIP normalize값 사용
+                                        std=[0.26862954, 0.26130258, 0.27577711])
             ])
 
         elif (mode == 'validation'):
@@ -127,6 +137,19 @@ class SSVideoClsDataset(Dataset):
                     buffer = self.loadvideo_decord(sample)
             buffer = self.data_transform(buffer)
             return buffer, self.label_array[index], sample.split("/")[-1].split(".")[0]
+        
+        elif self.mode == 'extract_clip':
+            sample = self.dataset_samples[index]
+            buffer = self.loadvideo_decord(sample)
+            if len(buffer) == 0:
+                while len(buffer) == 0:
+                    warnings.warn("video {} not correctly loaded during validation".format(sample))
+                    index = np.random.randint(self.__len__())
+                    sample = self.dataset_samples[index]
+                    buffer = self.loadvideo_decord(sample)
+            buffer = self.data_transform(buffer)
+            return buffer, self.label_array[index], sample.split("/")[-1].split(".")[0]
+
 
         elif self.mode == 'validation':
             sample = self.dataset_samples[index]
