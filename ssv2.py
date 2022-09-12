@@ -180,8 +180,12 @@ class SSVideoClsDataset(Dataset):
             if isinstance(buffer, list):
                 buffer = np.stack(buffer, 0)
 
-            spatial_step = 1.0 * (max(buffer.shape[1], buffer.shape[2]) - self.short_side_size) \
-                                / (self.test_num_crop - 1)
+            if self.test_num_crop == 1:
+                spatial_step = 1.0 * (max( buffer.shape[1], buffer.shape[2]) - self.short_side_size) \
+                                    / (self.test_num_crop)
+            else:
+                spatial_step = 1.0 * (max( buffer.shape[1], buffer.shape[2]) - self.short_side_size) \
+                                    / (self.test_num_crop - 1)
             temporal_start = chunk_nb # 0/1
             spatial_start = int(split_nb * spatial_step)
             if buffer.shape[1] >= buffer.shape[2]:
