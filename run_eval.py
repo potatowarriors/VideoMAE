@@ -3,6 +3,7 @@ import datetime
 import numpy as np
 import time
 import torch
+import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import json
 import os
@@ -106,6 +107,8 @@ def get_args():
                          help='Perform evaluation only')
      parser.add_argument('--dist_eval', action='store_true', default=False,
                          help='Enabling distributed evaluation')
+     # add extracted feature mode
+     parser.add_argument('--feature_mode', action='store_true')
      parser.add_argument('--num_workers', default=10, type=int)
      parser.add_argument('--pin_mem', action='store_true',
                          help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
@@ -235,6 +238,10 @@ def main(args, ds_init):
                # height(==width) for the checkpoint position embedding
                org_size = int(((pos_embed_checkpoint.shape[-2])))
           utils.load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
+     
+     model.patch_embed = nn.Identity()
+     model.pos_drop = nn.Identity()
+     model.blocks = nn.Identity()
      
      model.to(device)
      model_ema = None

@@ -50,6 +50,11 @@ class SSVideoClsDataset(Dataset):
             pass
         
         # feature extract를 위해 code 수정.
+        elif (mode == 'feature_mode'):
+            self.data_transform = video_transforms.Compose([
+                volume_transforms.ToTensor()
+            ])
+            
         elif (mode == 'extract'):
             self.data_transform = video_transforms.Compose([
                 video_transforms.Resize(self.short_side_size, interpolation='bilinear'),
@@ -126,6 +131,22 @@ class SSVideoClsDataset(Dataset):
             
             return buffer, self.label_array[index], index, {}
         
+        elif self.mode == 'feature_mode':
+            '''
+            feature_mode에서는 이미 extracte된 feature를 사용하므로 resize, crop 같은 과정은 전부 생략하고
+            불러온 numpy array feature를 tensor로만 바꿔준다.
+            '''
+            # extreacted feature이므로 decord같은 과정들은 생략한다
+            buffer = self.dataset_samples[index]
+            if len(buffer) == 0:
+                while len(buffer) == 0:
+                    warnings.warn("video {} not correctly loaded during validation".format(sample))
+            # extracted feature이기 때문에 resize, crop, 기타 과정은 생략하고 numpy array를 tensor로만 바꿔준다.
+            buffer = self.data_transform(buffer)
+            chunk_nb, split_nb = 1, 1 # one clip, centor crop 하나만 쓸꺼니까 각 1씩 할당.
+            return buffer, self.label_array[index], sample.split("/")[-1].split(".")[0], chunk_nb, split_nb
+            
+            
         elif self.mode == 'extract':
             sample = self.dataset_samples[index]
             buffer = self.loadvideo_decord(sample)
@@ -180,6 +201,7 @@ class SSVideoClsDataset(Dataset):
             if isinstance(buffer, list):
                 buffer = np.stack(buffer, 0)
 
+            # fix bug (test_crop수가 1 일때 zero division이 발생하는 error debug)
             if self.test_num_crop == 1:
                 spatial_step = 1.0 * (max( buffer.shape[1], buffer.shape[2]) - self.short_side_size) \
                                     / (self.test_num_crop)
