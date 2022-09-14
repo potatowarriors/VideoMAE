@@ -134,7 +134,7 @@ def get_args():
      return parser.parse_args(), ds_init
 
 def main(args, ds_init):
-     extract_path = '/data/dataset/something-something/extracted_clip_feature_ssv2'
+     extract_path = '/data/dataset/something-something/extracted_clip_feature_ssv2/clip_768_ssv2'
      
      print(args)
      
@@ -171,6 +171,7 @@ def main(args, ds_init):
      
      # create model.
      model, _ = clip.load("ViT-B/32", device=device)
+     model.visual.proj = None
      
      # engine_for_finetuning > validation_one_epoch 참조하여 작성.
      with torch.no_grad():
