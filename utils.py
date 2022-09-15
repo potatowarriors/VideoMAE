@@ -533,3 +533,29 @@ def multiple_samples_collate(batch, fold=False):
         return [inputs], labels, video_idx, extra_data
     else:
         return inputs, labels, video_idx, extra_data
+
+def cross_multiple_samples_collate(batch, fold=False):
+    """
+    Collate function for repeated augmentation. Each instance in the batch has
+    more than one sample.
+    Args:
+        batch (tuple or list): data batch to collate.
+    Returns:
+        (tuple): collated data batch.
+    """
+    s_inputs, t_inputs, labels, video_idx, extra_data = zip(*batch)
+    s_inputs = [item for sublist in s_inputs for item in sublist]
+    t_inputs = [item for sublist in t_inputs for item in sublist]
+    labels = [item for sublist in labels for item in sublist]
+    video_idx = [item for sublist in video_idx for item in sublist]
+    s_inputs, t_inputs, labels, video_idx, extra_data = (
+        default_collate(s_inputs),
+        default_collate(t_inputs),
+        default_collate(labels),
+        default_collate(video_idx),
+        default_collate(extra_data),
+    )
+    if fold:
+        return [s_inputs, t_inputs], labels, video_idx, extra_data
+    else:
+        return s_inputs, t_inputs, labels, video_idx, extra_data

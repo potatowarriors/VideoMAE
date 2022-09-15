@@ -115,29 +115,33 @@ class CrossAttention(nn.Module):
         self.t_q = nn.Linear(dim, all_head_dim, bias=False)
         self.s_kv = nn.Linear(dim, all_head_dim * 2, bias=False)
         if qkv_bias:
-            self.t_q_bias = nn.Parameter(torch.zeros(all_head_dim))
-            self.s_v_bias = nn.Parameter(torch.zeros(all_head_dim))
+            self.cross_t_q_bias = nn.Parameter(torch.zeros(all_head_dim))
+            self.cross_s_v_bias = nn.Parameter(torch.zeros(all_head_dim))
         else:
-            self.t_q_bias = None
-            self.s_v_bias = None
+            self.cross_t_q_bias = None
+            self.cross_s_v_bias = None
 
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(all_head_dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
     def forward(self, s_x, t_x):
-        B, N, C = t_x.shape
-        qkv_bias = None
-        if self.q_bias is not None:
-            q_bias = self.t_q_bias
-            kv_bias = torch.cat((torch.zeros_like(self.v_bias, requires_grad=False), self.s_v_bias))
+        s_x = s_x.unsqueeze(1)
+        B, s_N, C = s_x.shape
+        _, t_N, C = t_x.shape
+        cross_q_bias = None
+        cross_kv_bias = None
+        if self.cross_t_q_bias is not None:
+            cross_q_bias = self.cross_t_q_bias
+            cross_kv_bias = torch.cat((torch.zeros_like(self.cross_s_v_bias, requires_grad=False), self.cross_s_v_bias))
         # qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         
         # querry = temporal input
-        q = F.linear(input=t_x, weight=self.t_q.weight, bias=q_bias)
+        q = F.linear(input=t_x, weight=self.t_q.weight, bias=cross_q_bias)
+        q = q.reshape(B, t_N, self.num_heads, -1).permute(0, 2, 1, 3)
         # kv = spatial input
-        kv = F.linear(input=s_x, weight=self.s_kv.weight, bias=kv_bias)
-        kv = kv.reshape(B, N, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
+        kv = F.linear(input=s_x, weight=self.s_kv.weight, bias=cross_kv_bias)
+        kv = kv.reshape(B, s_N, 2, self.num_heads, -1).permute(2, 0, 3, 1, 4)
         q, k, v = q, kv[0], kv[1]   # make torchscript happy (cannot use tensor as tuple)
 
         q = q * self.scale
@@ -147,10 +151,10 @@ class CrossAttention(nn.Module):
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
 
-        x = (attn @ v).transpose(1, 2).reshape(B, N, -1)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
+        t_x = (attn @ v).transpose(1, 2).reshape(B, t_N, -1)
+        t_x = self.proj(t_x)
+        t_x = self.proj_drop(t_x)
+        return t_x
     
 class Block(nn.Module):
 
@@ -167,7 +171,6 @@ class Block(nn.Module):
         
         # pass through cross attn module
         self.t_norm2 = norm_layer(dim)
-        self.s_norm2 = norm_layer(dim)
         self.cross = CrossAttention(
             dim, num_heads=num_heads, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0., attn_head_dim=None
         )
@@ -186,7 +189,7 @@ class Block(nn.Module):
     def forward(self, s_x, t_x):
         if self.gamma_1 is None:
             t_x = t_x + self.drop_path(self.spatial_temporal_attn(self.norm1(t_x)))
-            t_x = t_x + self.drop_path(self.cross(self.t_norm2(t_x), self.s_norm2(s_x)))
+            t_x = t_x + self.drop_path(self.cross(s_x, self.t_norm2(t_x)))
             t_x = t_x + self.drop_path(self.mlp(self.norm3(t_x)))
         else:
             t_x = t_x + self.drop_path(self.gamma_1 * self.spatial_temporal_attn(self.norm1(t_x)))
@@ -236,7 +239,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 
     
-class SpatioTemporalTransformer(nn.Module):
+class CrossTransformer(nn.Module):
     """ Vision Transformer with support for patch or hybrid CNN input stage
     """
     def __init__(self, 
@@ -319,31 +322,31 @@ class SpatioTemporalTransformer(nn.Module):
         self.num_classes = num_classes
         self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
-    def forward_features(self, t_x, s_x):
+    def forward_features(self, s_x, t_x):
         B, _, _ = t_x.size()
 
         if self.pos_embed is not None:
-            x = x + self.pos_embed.expand(B, -1, -1).type_as(x).to(x.device).clone().detach()
-        x = self.pos_drop(x)
+            t_x = t_x + self.pos_embed.expand(B, -1, -1).type_as(t_x).to(t_x.device).clone().detach()
+        t_x = self.pos_drop(t_x)
 
         for blk in self.blocks:
-            x = blk(x)
+            t_x = blk(s_x, t_x)
 
-        x = self.norm(x)
+        t_x = self.norm(t_x)
         # mean pooling 관련 코드
         if self.fc_norm is not None:
-            return self.fc_norm(x.mean(1))
+            return self.fc_norm(t_x.mean(1))
         else:
-            return x[:, 0]
+            return t_x[:, 0]
 
-    def forward(self, x):
-        x = self.forward_features(x)
-        x = self.head(x)
-        return x
+    def forward(self, s_x, t_x):
+        t_x = self.forward_features(s_x, t_x)
+        t_x = self.head(t_x)
+        return t_x
 
 @register_model
 def cross_vit_small_patch16_224(pretrained=False, **kwargs):
-    model = SpatioTemporalTransformer(
+    model = CrossTransformer(
         patch_size=16, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     model.default_cfg = _cfg()
@@ -351,7 +354,7 @@ def cross_vit_small_patch16_224(pretrained=False, **kwargs):
 
 @register_model
 def cross_vit_base_patch16_224(pretrained=False, **kwargs):
-    model = SpatioTemporalTransformer(
+    model = CrossTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     #model.default_cfg = _cfg()
@@ -360,7 +363,7 @@ def cross_vit_base_patch16_224(pretrained=False, **kwargs):
 
 @register_model
 def cross_vit_base_patch16_384(pretrained=False, **kwargs):
-    model = SpatioTemporalTransformer(
+    model = CrossTransformer(
         img_size=384, patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     model.default_cfg = _cfg()
@@ -369,7 +372,7 @@ def cross_vit_base_patch16_384(pretrained=False, **kwargs):
 
 @register_model
 def cross_vit_large_patch16_224(pretrained=False, **kwargs):
-    model = SpatioTemporalTransformer(
+    model = CrossTransformer(
         patch_size=16, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     model.default_cfg = _cfg()
@@ -378,7 +381,7 @@ def cross_vit_large_patch16_224(pretrained=False, **kwargs):
 
 @register_model
 def cross_vit_large_patch16_384(pretrained=False, **kwargs):
-    model = SpatioTemporalTransformer(
+    model = CrossTransformer(
         img_size=384, patch_size=16, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     model.default_cfg = _cfg()
@@ -387,7 +390,7 @@ def cross_vit_large_patch16_384(pretrained=False, **kwargs):
 
 @register_model
 def cross_vit_large_patch16_512(pretrained=False, **kwargs):
-    model = SpatioTemporalTransformer(
+    model = CrossTransformer(
         img_size=512, patch_size=16, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     model.default_cfg = _cfg()

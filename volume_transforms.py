@@ -127,5 +127,6 @@ class ToTensor(object):
     """
 
     def __call__(self, array):
+        array = np.load(array)
         tensor = torch.from_numpy(array)
         return tensor

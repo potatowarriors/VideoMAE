@@ -3,7 +3,7 @@ from torchvision import transforms
 from transforms import *
 from masking_generator import TubeMaskingGenerator
 from kinetics import VideoClsDataset, VideoMAE
-from ssv2 import SSVideoClsDataset
+from ssv2 import CrossSSVideoClsDataset, SSVideoClsDataset
 
 
 class DataAugmentationForVideoMAE(object):
@@ -90,39 +90,64 @@ def build_dataset(is_train, test_mode, args):
         mode = None
         anno_path = None
         if is_train is True:
-            mode = 'train'
-            anno_path = os.path.join(args.data_path, 'train.csv')
-        # feature extract를 위해 수정한 부분.
-        elif args.extract is True:
-            mode = 'extract'
-            anno_path = os.path.join(args.data_path, 'train.csv')
-        elif args.extract_clip is True:
-            mode = 'extract_clip'
-            anno_path = os.path.join(args.data_path, 'test.csv')
-        
+            if args.cross_attn is True:
+                mode = 'cross_attn_train'
+                s_anno_path = os.path.join(args.data_path, 'feature_clip_train.csv')
+                t_anno_path = os.path.join(args.data_path, 'feature_allpatch_train.csv')
+            else:
+                mode = 'train'
+                anno_path = os.path.join(args.data_path, 'train.csv')
         elif test_mode is True:
-            mode = 'test'
-            anno_path = os.path.join(args.data_path, 'test.csv') 
-        else:  
-            mode = 'validation'
-            anno_path = os.path.join(args.data_path, 'val.csv') 
-
-        dataset = SSVideoClsDataset(
-            anno_path=anno_path,
-            data_path='/',
-            mode=mode,
-            clip_len=1,
-            num_segment=args.num_frames,
-            test_num_segment=args.test_num_segment,
-            test_num_crop=args.test_num_crop,
-            num_crop=1 if not test_mode else 3,
-            keep_aspect_ratio=True,
-            crop_size=args.input_size,
-            short_side_size=args.short_side_size,
-            new_height=256,
-            new_width=320,
-            args=args)
-        nb_classes = 174
+            if args.cross_attn is True:
+                mode = 'cross_attn_test'
+                s_anno_path = os.path.join(args.data_path, 'feature_clip_test.csv')
+                t_anno_path = os.path.join(args.data_path, 'feature_allpatch_test.csv')
+            else:
+                mode = 'test'
+                anno_path = os.path.join(args.data_path, 'train.csv')
+        else:
+            if args.cross_attn is True:
+                mode = 'cross_attn_val'
+                s_anno_path = os.path.join(args.data_path, 'feature_clip_val.csv')
+                t_anno_path = os.path.join(args.data_path, 'feature_allpatch_val.csv')
+            else:
+                mode = 'val'
+                anno_path = os.path.join(args.data_path, 'val.csv')
+        
+        if args.cross_attn is True:
+            dataset = CrossSSVideoClsDataset(
+                s_anno_path=s_anno_path,
+                t_anno_path=t_anno_path,
+                mode = mode,
+                clip_len=1,
+                num_segment=args.num_frames,
+                test_num_segment=args.test_num_segment,
+                test_num_crop=args.test_num_crop,
+                num_crop=1 if not test_mode else 3,
+                keep_aspect_ratio=True,
+                crop_size=args.input_size,
+                short_side_size=args.short_side_size,
+                new_height=256,
+                new_width=320,
+                args=args)
+            nb_classes=174
+        else:
+            dataset = SSVideoClsDataset(
+                anno_path=anno_path,
+                data_path='/',
+                mode=mode,
+                clip_len=1,
+                num_segment=args.num_frames,
+                test_num_segment=args.test_num_segment,
+                test_num_crop=args.test_num_crop,
+                num_crop=1 if not test_mode else 3,
+                keep_aspect_ratio=True,
+                crop_size=args.input_size,
+                short_side_size=args.short_side_size,
+                new_height=256,
+                new_width=320,
+                args=args)
+            nb_classes = 174
 
     elif args.data_set == 'UCF101':
         mode = None

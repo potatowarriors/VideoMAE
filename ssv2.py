@@ -48,30 +48,6 @@ class SSVideoClsDataset(Dataset):
 
         if (mode == 'train'):
             pass
-        
-        # feature extract를 위해 code 수정.
-        elif (mode == 'feature_mode'):
-            self.data_transform = video_transforms.Compose([
-                volume_transforms.ToTensor()
-            ])
-            
-        elif (mode == 'extract'):
-            self.data_transform = video_transforms.Compose([
-                video_transforms.Resize(self.short_side_size, interpolation='bilinear'),
-                video_transforms.CenterCrop(size=(self.crop_size, self.crop_size)),
-                volume_transforms.ClipToTensor(),
-                video_transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                        std=[0.229, 0.224, 0.225])
-            ])
-            
-        elif (mode == 'extract_clip'):
-            self.data_transform = video_transforms.Compose([
-                video_transforms.Resize(self.short_side_size, interpolation='bilinear'),
-                video_transforms.CenterCrop(size=(self.crop_size, self.crop_size)),
-                volume_transforms.ClipToTensor(),
-                video_transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], # CLIP normalize값 사용
-                                        std=[0.26862954, 0.26130258, 0.27577711])
-            ])
 
         elif (mode == 'validation'):
             self.data_transform = video_transforms.Compose([
@@ -338,6 +314,58 @@ class SSVideoClsDataset(Dataset):
             return len(self.dataset_samples)
         else:
             return len(self.test_dataset)
+
+class CrossSSVideoClsDataset(SSVideoClsDataset):
+    
+    def __init__(self, s_anno_path, t_anno_path, mode='train', clip_len=8,
+                 crop_size=224, short_side_size=256, new_height=256, new_width=340, keep_aspect_ratio=True,
+                 num_segment=1, num_crop=1, test_num_segment=10, test_num_crop=3, args=None):
+        super().__init__(s_anno_path, t_anno_path, mode, clip_len, crop_size, short_side_size, new_height, new_width,
+                         keep_aspect_ratio, num_segment, num_crop, test_num_segment, test_num_crop, args)
+        self.s_anno_path = s_anno_path
+        self.t_anno_path = t_anno_path
+        self.data_transform = video_transforms.Compose([
+            volume_transforms.ToTensor()
+        ])
+        
+        import pandas as pd
+        s_cleaned = pd.read_csv(self.s_anno_path, header=None, delimiter=' ')
+        t_cleaned = pd.read_csv(self.t_anno_path, header=None, delimiter=' ')
+        
+        self.s_dataset_samples = list(s_cleaned.values[:, 0])
+        self.t_dataset_samples = list(t_cleaned.values[:, 0])
+        
+        self.label_array = list(t_cleaned.values[:, 1])
+        
+        
+    def __getitem__(self, index):
+        if self.mode == 'cross_attn_train':
+            s_sample_path = self.s_dataset_samples[index]
+            t_sample_path = self.t_dataset_samples[index]
+            
+            s_feature = self.data_transform(s_sample_path)
+            t_feature = self.data_transform(t_sample_path)
+            return s_feature, t_feature, self.label_array[index], index, {}
+
+        elif self.mode == 'cross_attn_validation':
+            s_sample_path = self.s_dataset_samples[index]
+            t_sample_path = self.t_dataset_samples[index]
+            
+            s_feature = self.data_transform(s_sample_path)
+            t_feature = self.data_transform(t_sample_path)
+            return s_feature, t_feature,self.label_array[index], t_sample_path.split("/")[-1].split(".")[0]
+
+        elif self.mode == 'cross_attn_test':
+            chunk_nb, split_nb = 1, 1
+            s_sample_path = self.s_dataset_samples[index]
+            t_sample_path = self.t_dataset_samples[index]
+            
+            s_feature = self.data_transform(s_sample_path)
+            t_feature = self.data_transform(t_sample_path)
+            return s_feature, t_feature, self.test_label_array[index], t_sample_path.split("/")[-1].split(".")[0], \
+                   chunk_nb, split_nb
+        else:
+            raise NameError('mode {} unkown'.format(self.mode))
 
 
 def spatial_sampling(
