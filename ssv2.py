@@ -347,7 +347,7 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
             t_feature = self.data_transform(t_sample_path)
             return s_feature, t_feature, self.label_array[index], index, {}
 
-        elif self.mode == 'cross_attn_validation':
+        elif self.mode == 'cross_attn_val':
             s_sample_path = self.s_dataset_samples[index]
             t_sample_path = self.t_dataset_samples[index]
             

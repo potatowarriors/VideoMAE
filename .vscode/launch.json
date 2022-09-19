@@ -1,0 +1,43 @@
+{
+     // Use IntelliSense to learn about possible attributes.
+     // Hover to view descriptions of existing attributes.
+     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+     "version": "0.2.0",
+     "configurations": [
+          {
+               "name": "Python: Current File",
+               "type": "python",
+               "request": "launch",
+               "module": "torch.distributed.launch",
+               "console": "integratedTerminal",
+               "justMyCode": false,
+               "args" : [
+                    "--nproc_per_node", "4",
+                    "--master_port", "12320",
+                    "/data/potatowarriors/repos/videomae/VideoMAE/run_cross_finetuning.py",
+                    "--model", "cross_vit_base_patch16_224",
+                    "--data_set", "SSV2",
+                    "--nb_classes", "174",
+                    "--data_path", "/data/potatowarriors/repos/videomae/VideoMAE/dataset/ssv2",
+                    "--log_dir", "/data/potatowarriors/repos/videomae/VideoMAE/train_sh/cross_attn_fisrt",
+                    "--output_dir", "/data/potatowarriors/repos/videomae/VideoMAE/train_sh/cross_attn_fisrt",
+                    "--batch_size", "12",
+                    "--epochs", "10",
+                    "--save_ckpt_freq", "1",
+                    "--cross_attn",
+                    "--input_size", "224",
+                    "--short_side_size", "224",
+                    "--num_frames", "16",
+                    "--opt", "adamw",
+                    "--lr", "5e-4",
+                    "--no_pin_mem",
+                    "--opt_betas", "0.9","0.999",
+                    "--weight_decay", "0.05",
+                    "--dist_eval",
+                    "--test_num_segment", "1",
+                    "--test_num_crop", "1",
+                    "--enable_deepspeed"
+               ]
+          }
+     ]
+}
