@@ -96,7 +96,7 @@ def build_dataset(is_train, test_mode, args):
                 t_anno_path = os.path.join(args.data_path, 'feature_allpatch_train.csv')
             else:
                 mode = 'train'
-                anno_path = os.path.join(args.data_path, 'train.csv')
+                anno_path = os.path.join(args.data_path, 'train_mp4.csv')
         elif test_mode is True:
             if args.cross_attn is True:
                 mode = 'cross_attn_test'
@@ -104,7 +104,7 @@ def build_dataset(is_train, test_mode, args):
                 t_anno_path = os.path.join(args.data_path, 'feature_allpatch_test.csv')
             else:
                 mode = 'test'
-                anno_path = os.path.join(args.data_path, 'train.csv')
+                anno_path = os.path.join(args.data_path, 'test_mp4.csv')
         else:
             if args.cross_attn is True:
                 mode = 'cross_attn_val'
@@ -112,7 +112,7 @@ def build_dataset(is_train, test_mode, args):
                 t_anno_path = os.path.join(args.data_path, 'feature_allpatch_val.csv')
             else:
                 mode = 'val'
-                anno_path = os.path.join(args.data_path, 'val.csv')
+                anno_path = os.path.join(args.data_path, 'test_mp4.csv')
         
         if args.cross_attn is True:
             dataset = CrossSSVideoClsDataset(

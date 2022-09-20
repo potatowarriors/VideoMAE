@@ -193,7 +193,7 @@ class Block(nn.Module):
             t_x = t_x + self.drop_path(self.mlp(self.norm3(t_x)))
         else:
             t_x = t_x + self.drop_path(self.gamma_1 * self.spatial_temporal_attn(self.norm1(t_x)))
-            t_x = t_x + self.drop_path(self.gamma_2 * self.cross(self.t_norm2(t_x), self.s_norm2(s_x)))
+            t_x = t_x + self.drop_path(self.gamma_2 * self.cross(s_x, self.t_norm2(t_x)))
             t_x = t_x + self.drop_path(self.gamma_3 * self.mlp(self.norm3(t_x)))
         return t_x
 
@@ -355,7 +355,7 @@ def cross_vit_small_patch16_224(pretrained=False, **kwargs):
 @register_model
 def cross_vit_base_patch16_224(pretrained=False, **kwargs):
     model = CrossTransformer(
-        patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
+        patch_size=16, embed_dim=768, depth=6, num_heads=6, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     #model.default_cfg = _cfg()
     return model
