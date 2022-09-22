@@ -93,7 +93,7 @@ def build_dataset(is_train, test_mode, args):
             if args.cross_attn is True:
                 mode = 'cross_attn_train'
                 s_anno_path = os.path.join(args.data_path, 'feature_clip_train.csv')
-                t_anno_path = os.path.join(args.data_path, 'feature_allpatch_train.csv')
+                t_anno_path = os.path.join(args.data_path, 'train_mp4.csv')
             else:
                 mode = 'train'
                 anno_path = os.path.join(args.data_path, 'train_mp4.csv')
@@ -101,7 +101,7 @@ def build_dataset(is_train, test_mode, args):
             if args.cross_attn is True:
                 mode = 'cross_attn_test'
                 s_anno_path = os.path.join(args.data_path, 'feature_clip_test.csv')
-                t_anno_path = os.path.join(args.data_path, 'feature_allpatch_test.csv')
+                t_anno_path = os.path.join(args.data_path, 'test_mp4.csv')
             else:
                 mode = 'test'
                 anno_path = os.path.join(args.data_path, 'test_mp4.csv')
@@ -109,7 +109,7 @@ def build_dataset(is_train, test_mode, args):
             if args.cross_attn is True:
                 mode = 'cross_attn_val'
                 s_anno_path = os.path.join(args.data_path, 'feature_clip_val.csv')
-                t_anno_path = os.path.join(args.data_path, 'feature_allpatch_val.csv')
+                t_anno_path = os.path.join(args.data_path, 'test_mp4.csv')
             else:
                 mode = 'val'
                 anno_path = os.path.join(args.data_path, 'test_mp4.csv')

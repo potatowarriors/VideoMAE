@@ -257,16 +257,22 @@ def init_distributed_mode(args):
         os.environ['WORLD_SIZE'] = str(args.world_size)
     # elif 'SLURM_PROCID' in os.environ:
     #     args.rank = int(os.environ['SLURM_PROCID'])
+    #     print('strat args.rank :', args.rank)
     #     args.gpu = int(os.environ['SLURM_LOCALID'])
+    #     print('strat args.gpu:',  args.gpu)
     #     args.world_size = int(os.environ['SLURM_NTASKS'])
+    #     print('strat args.world_size:', args.world_size)
     #     os.environ['RANK'] = str(args.rank)
     #     os.environ['LOCAL_RANK'] = str(args.gpu)
     #     os.environ['WORLD_SIZE'] = str(args.world_size)
 
     #     node_list = os.environ['SLURM_NODELIST']
+    #     print('node list:', node_list)
     #     addr = subprocess.getoutput(
     #         f'scontrol show hostname {node_list} | head -n1')
+    #     print('addr:', addr)
     #     if 'MASTER_ADDR' not in os.environ:
+    #         print('no masteraddr')
     #         os.environ['MASTER_ADDR'] = addr
     elif 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
         args.rank = int(os.environ["RANK"])
@@ -544,7 +550,7 @@ def cross_multiple_samples_collate(batch, fold=False):
         (tuple): collated data batch.
     """
     s_inputs, t_inputs, labels, video_idx, extra_data = zip(*batch)
-    s_inputs = [item for sublist in s_inputs for item in sublist]
+    s_inputs = [item for item in s_inputs for i in range(2)] # sample을 2개씩 sampling하니까 range2로 반복시켜줬다. 나중에 num_sample숫자에 맞춰 코드 짜줘야 한다.
     t_inputs = [item for sublist in t_inputs for item in sublist]
     labels = [item for sublist in labels for item in sublist]
     video_idx = [item for sublist in video_idx for item in sublist]
@@ -559,3 +565,17 @@ def cross_multiple_samples_collate(batch, fold=False):
         return [s_inputs, t_inputs], labels, video_idx, extra_data
     else:
         return s_inputs, t_inputs, labels, video_idx, extra_data
+    
+def freze_headinitialize_crossattn(model, nb_classes):
+    model.reset_classifier(nb_classes)
+    block_list = ['t_norm2','cross','norm3', 'fc_norm', 'head', 'pos_embed', 'patch_embed']
+    for name, param in model.named_parameters():
+        for block in block_list:
+            if block in name:
+                param.requires_grad = True
+                break
+            else:
+                param.requires_grad = False
+    
+    
+    return model

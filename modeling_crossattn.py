@@ -50,8 +50,8 @@ class Mlp(nn.Module):
         x = self.drop(x)
         return x
 
-
-class SpatioTemporalAttention(nn.Module):
+# 기존 weight load편의성을 위해 Attention이름을 유지한다.
+class Attention(nn.Module):
     def __init__(
             self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0.,
             proj_drop=0., attn_head_dim=None):
@@ -163,7 +163,7 @@ class Block(nn.Module):
                  attn_head_dim=None):
         super().__init__()
         self.norm1 = norm_layer(dim)
-        self.spatial_temporal_attn = SpatioTemporalAttention(
+        self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
@@ -188,11 +188,11 @@ class Block(nn.Module):
 
     def forward(self, s_x, t_x):
         if self.gamma_1 is None:
-            t_x = t_x + self.drop_path(self.spatial_temporal_attn(self.norm1(t_x)))
+            t_x = t_x + self.drop_path(self.attn(self.norm1(t_x)))
             t_x = t_x + self.drop_path(self.cross(s_x, self.t_norm2(t_x)))
             t_x = t_x + self.drop_path(self.mlp(self.norm3(t_x)))
         else:
-            t_x = t_x + self.drop_path(self.gamma_1 * self.spatial_temporal_attn(self.norm1(t_x)))
+            t_x = t_x + self.drop_path(self.gamma_1 * self.attn(self.norm1(t_x)))
             t_x = t_x + self.drop_path(self.gamma_2 * self.cross(s_x, self.t_norm2(t_x)))
             t_x = t_x + self.drop_path(self.gamma_3 * self.mlp(self.norm3(t_x)))
         return t_x
@@ -258,7 +258,7 @@ class CrossTransformer(nn.Module):
                  drop_path_rate=0., 
                  norm_layer=nn.LayerNorm, 
                  init_values=0.,
-                 use_learnable_pos_emb=False, 
+                 use_learnable_pos_emb=False,
                  init_scale=0.,
                  all_frames=16,
                  tubelet_size=2,
@@ -268,7 +268,9 @@ class CrossTransformer(nn.Module):
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
         self.tubelet_size = tubelet_size
-        num_patches = ((img_size // patch_size) ** 2) * 8
+        self.patch_embed = PatchEmbed(
+            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim, num_frames=all_frames, tubelet_size=self.tubelet_size)
+        num_patches = self.patch_embed.num_patches
 
         if use_learnable_pos_emb:
             self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
@@ -323,6 +325,7 @@ class CrossTransformer(nn.Module):
         self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
     def forward_features(self, s_x, t_x):
+        t_x = self.patch_embed(t_x)
         B, _, _ = t_x.size()
 
         if self.pos_embed is not None:
@@ -355,7 +358,7 @@ def cross_vit_small_patch16_224(pretrained=False, **kwargs):
 @register_model
 def cross_vit_base_patch16_224(pretrained=False, **kwargs):
     model = CrossTransformer(
-        patch_size=16, embed_dim=768, depth=6, num_heads=6, mlp_ratio=4, qkv_bias=True,
+        patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, use_learnable_pos_emb=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     #model.default_cfg = _cfg()
     return model

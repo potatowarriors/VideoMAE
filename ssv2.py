@@ -107,47 +107,6 @@ class SSVideoClsDataset(Dataset):
             
             return buffer, self.label_array[index], index, {}
         
-        elif self.mode == 'feature_mode':
-            '''
-            feature_mode에서는 이미 extracte된 feature를 사용하므로 resize, crop 같은 과정은 전부 생략하고
-            불러온 numpy array feature를 tensor로만 바꿔준다.
-            '''
-            # extreacted feature이므로 decord같은 과정들은 생략한다
-            buffer = self.dataset_samples[index]
-            if len(buffer) == 0:
-                while len(buffer) == 0:
-                    warnings.warn("video {} not correctly loaded during validation".format(sample))
-            # extracted feature이기 때문에 resize, crop, 기타 과정은 생략하고 numpy array를 tensor로만 바꿔준다.
-            buffer = self.data_transform(buffer)
-            chunk_nb, split_nb = 1, 1 # one clip, centor crop 하나만 쓸꺼니까 각 1씩 할당.
-            return buffer, self.label_array[index], sample.split("/")[-1].split(".")[0], chunk_nb, split_nb
-            
-            
-        elif self.mode == 'extract':
-            sample = self.dataset_samples[index]
-            buffer = self.loadvideo_decord(sample)
-            if len(buffer) == 0:
-                while len(buffer) == 0:
-                    warnings.warn("video {} not correctly loaded during validation".format(sample))
-                    index = np.random.randint(self.__len__())
-                    sample = self.dataset_samples[index]
-                    buffer = self.loadvideo_decord(sample)
-            buffer = self.data_transform(buffer)
-            return buffer, self.label_array[index], sample.split("/")[-1].split(".")[0]
-        
-        elif self.mode == 'extract_clip':
-            sample = self.dataset_samples[index]
-            buffer = self.loadvideo_decord(sample)
-            if len(buffer) == 0:
-                while len(buffer) == 0:
-                    warnings.warn("video {} not correctly loaded during validation".format(sample))
-                    index = np.random.randint(self.__len__())
-                    sample = self.dataset_samples[index]
-                    buffer = self.loadvideo_decord(sample)
-            buffer = self.data_transform(buffer)
-            return buffer, self.label_array[index], sample.split("/")[-1].split(".")[0]
-
-
         elif self.mode == 'validation':
             sample = self.dataset_samples[index]
             buffer = self.loadvideo_decord(sample)
@@ -322,11 +281,50 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
                  num_segment=1, num_crop=1, test_num_segment=10, test_num_crop=3, args=None):
         super().__init__(s_anno_path, t_anno_path, mode, clip_len, crop_size, short_side_size, new_height, new_width,
                          keep_aspect_ratio, num_segment, num_crop, test_num_segment, test_num_crop, args)
+        self.aug = False
+        self.rand_erase = False
+        if self.mode in ['train']:
+            self.aug = True
+            if self.args.reprob > 0:
+                self.rand_erase = True
+        if VideoReader is None:
+            raise ImportError("Unable to import `decord` which is required to read videos.")
+        
         self.s_anno_path = s_anno_path
         self.t_anno_path = t_anno_path
-        self.data_transform = video_transforms.Compose([
+        self.clip_data_transform = video_transforms.Compose([
             volume_transforms.ToTensor()
         ])
+        if (mode == 'cross_attn_train'):
+            pass
+
+        elif (mode == 'cross_attn_val'):
+            self.data_transform = video_transforms.Compose([
+                video_transforms.Resize(self.short_side_size, interpolation='bilinear'),
+                video_transforms.CenterCrop(size=(self.crop_size, self.crop_size)),
+                volume_transforms.ClipToTensor(),
+                video_transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                        std=[0.229, 0.224, 0.225])
+            ])
+        elif mode == 'cross_attn_test':
+            self.data_resize = video_transforms.Compose([
+                video_transforms.Resize(size=(short_side_size), interpolation='bilinear')
+            ])
+            self.data_transform = video_transforms.Compose([
+                volume_transforms.ClipToTensor(),
+                video_transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                        std=[0.229, 0.224, 0.225])
+            ])
+            self.test_seg = []
+            self.test_dataset = []
+            self.test_label_array = []
+            for ck in range(self.test_num_segment):
+                for cp in range(self.test_num_crop):
+                    for idx in range(len(self.label_array)):
+                        sample_label = self.label_array[idx]
+                        self.test_label_array.append(sample_label)
+                        self.test_dataset.append(self.dataset_samples[idx])
+                        self.test_seg.append((ck, cp))
         
         import pandas as pd
         s_cleaned = pd.read_csv(self.s_anno_path, header=None, delimiter=' ')
@@ -340,29 +338,87 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
         
     def __getitem__(self, index):
         if self.mode == 'cross_attn_train':
-            s_sample_path = self.s_dataset_samples[index]
-            t_sample_path = self.t_dataset_samples[index]
-            
-            s_feature = self.data_transform(s_sample_path)
-            t_feature = self.data_transform(t_sample_path)
-            return s_feature, t_feature, self.label_array[index], index, {}
+            args = self.args
+            scale_t = 1
 
-        elif self.mode == 'cross_attn_val':
-            s_sample_path = self.s_dataset_samples[index]
-            t_sample_path = self.t_dataset_samples[index]
+            s_sample = self.s_dataset_samples[index]
+            s_feature = self.clip_data_transform(s_sample)
+            t_sample = self.t_dataset_samples[index]
+            buffer = self.loadvideo_decord(t_sample, sample_rate_scale=scale_t) # T H W C
+            if len(buffer) == 0:
+                while len(buffer) == 0:
+                    warnings.warn("video {} not correctly loaded during training".format(sample))
+                    index = np.random.randint(self.__len__())
+                    t_sample = self.t_dataset_samples[index]
+                    buffer = self.loadvideo_decord(t_sample, sample_rate_scale=scale_t)
+
+            if args.num_sample > 1:
+                frame_list = []
+                label_list = []
+                index_list = []
+                for _ in range(args.num_sample):
+                    new_frames = self._aug_frame(buffer, args)
+                    label = self.label_array[index]
+                    frame_list.append(new_frames)
+                    label_list.append(label)
+                    index_list.append(index)
+                return s_feature, frame_list, label_list, index_list, {}
+            else:
+                buffer = self._aug_frame(buffer, args)
             
-            s_feature = self.data_transform(s_sample_path)
-            t_feature = self.data_transform(t_sample_path)
-            return s_feature, t_feature,self.label_array[index], t_sample_path.split("/")[-1].split(".")[0]
+            return s_feature ,buffer, self.label_array[index], index, {}
+        
+        elif self.mode == 'cross_attn_val':
+            s_sample = self.s_dataset_samples[index]
+            s_feature = self.clip_data_transform(s_sample)
+            t_sample = self.t_dataset_samples[index]
+            buffer = self.loadvideo_decord(t_sample, sample_rate_scale=scale_t)
+            if len(buffer) == 0:
+                while len(buffer) == 0:
+                    warnings.warn("video {} not correctly loaded during validation".format(sample))
+                    index = np.random.randint(self.__len__())
+                    t_sample = self.t_dataset_samples[index]
+                    buffer = self.loadvideo_decord(t_sample)
+            buffer = self.data_transform(buffer)
+            return s_feature, buffer, self.label_array[index], sample.split("/")[-1].split(".")[0]
 
         elif self.mode == 'cross_attn_test':
-            chunk_nb, split_nb = 1, 1
-            s_sample_path = self.s_dataset_samples[index]
-            t_sample_path = self.t_dataset_samples[index]
-            
-            s_feature = self.data_transform(s_sample_path)
-            t_feature = self.data_transform(t_sample_path)
-            return s_feature, t_feature, self.test_label_array[index], t_sample_path.split("/")[-1].split(".")[0], \
+            s_sample = self.s_dataset_samples[index]
+            s_feature = self.clip_data_transform(s_sample)
+            sample = self.test_dataset[index]
+            chunk_nb, split_nb = self.test_seg[index]
+            buffer = self.loadvideo_decord(sample)
+
+            while len(buffer) == 0:
+                warnings.warn("video {}, temporal {}, spatial {} not found during testing".format(\
+                    str(self.test_dataset[index]), chunk_nb, split_nb))
+                index = np.random.randint(self.__len__())
+                sample = self.test_dataset[index]
+                chunk_nb, split_nb = self.test_seg[index]
+                buffer = self.loadvideo_decord(sample)
+
+            buffer = self.data_resize(buffer)
+            if isinstance(buffer, list):
+                buffer = np.stack(buffer, 0)
+
+            # fix bug (test_crop수가 1 일때 zero division이 발생하는 error debug)
+            if self.test_num_crop == 1:
+                spatial_step = 1.0 * (max( buffer.shape[1], buffer.shape[2]) - self.short_side_size) \
+                                    / (self.test_num_crop)
+            else:
+                spatial_step = 1.0 * (max( buffer.shape[1], buffer.shape[2]) - self.short_side_size) \
+                                    / (self.test_num_crop - 1)
+            temporal_start = chunk_nb # 0/1
+            spatial_start = int(split_nb * spatial_step)
+            if buffer.shape[1] >= buffer.shape[2]:
+                buffer = buffer[temporal_start::2, \
+                       spatial_start:spatial_start + self.short_side_size, :, :]
+            else:
+                buffer = buffer[temporal_start::2, \
+                       :, spatial_start:spatial_start + self.short_side_size, :]
+
+            buffer = self.data_transform(buffer)
+            return s_feature, buffer, self.test_label_array[index], sample.split("/")[-1].split(".")[0], \
                    chunk_nb, split_nb
         else:
             raise NameError('mode {} unkown'.format(self.mode))

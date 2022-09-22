@@ -18,7 +18,7 @@ from optim_factory import create_optimizer, get_parameter_groups, LayerDecayValu
 
 from datasets import build_dataset
 from engine_for_crossattn import train_one_epoch, validation_one_epoch, final_test, merge
-from utils import NativeScalerWithGradNormCount as NativeScaler
+from utils import NativeScalerWithGradNormCount as NativeScaler, freze_headinitialize_crossattn
 from utils import  cross_multiple_samples_collate
 import utils
 import modeling_finetune
@@ -86,13 +86,13 @@ def get_args():
                         help='num of steps to warmup LR, will overload warmup_epochs if set > 0')
 
     # Augmentation parameters
-    parser.add_argument('--color_jitter', type=float, default=0.0, metavar='PCT',
+    parser.add_argument('--color_jitter', type=float, default=0.4, metavar='PCT',
                         help='Color jitter factor (default: 0.4)')
-    parser.add_argument('--num_sample', type=int, default=0,
+    parser.add_argument('--num_sample', type=int, default=2,
                         help='Repeated_aug (default: 2)')
-    parser.add_argument('--aa', type=str, default=None, metavar='NAME',
+    parser.add_argument('--aa', type=str, default='rand-m7-n4-mstd0.5-inc1', metavar='NAME',
                         help='Use AutoAugment policy. "v0" or "original". " + "(default: rand-m7-n4-mstd0.5-inc1)'),
-    parser.add_argument('--smoothing', type=float, default=0,
+    parser.add_argument('--smoothing', type=float, default=0.1,
                         help='Label smoothing (default: 0.1)')
     parser.add_argument('--train_interpolation', type=str, default='bicubic',
                         help='Training interpolation (random, bilinear, bicubic default: "bicubic")')
@@ -114,9 +114,9 @@ def get_args():
                         help='Do not random erase first (clean) augmentation split')
 
     # Mixup params
-    parser.add_argument('--mixup', type=float, default=0.0,
+    parser.add_argument('--mixup', type=float, default=0.8,
                         help='mixup alpha, mixup enabled if > 0.')
-    parser.add_argument('--cutmix', type=float, default=0.0,
+    parser.add_argument('--cutmix', type=float, default=1.0,
                         help='cutmix alpha, cutmix enabled if > 0.')
     parser.add_argument('--cutmix_minmax', type=float, nargs='+', default=None,
                         help='cutmix min/max ratio, overrides alpha and enables cutmix if set (default: None)')
@@ -172,7 +172,7 @@ def get_args():
                         help='Perform evaluation only')
     parser.add_argument('--dist_eval', action='store_true', default=False,
                         help='Enabling distributed evaluation')
-    parser.add_argument('--num_workers', default=4, type=int)
+    parser.add_argument('--num_workers', default=10, type=int)
     parser.add_argument('--pin_mem', action='store_true',
                         help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
     parser.add_argument('--no_pin_mem', action='store_false', dest='pin_mem')
@@ -350,6 +350,7 @@ def main(args, ds_init):
                 new_dict[key[8:]] = checkpoint_model[key]
             else:
                 new_dict[key] = checkpoint_model[key]
+        # load로 불러온 pre-trained weight를 new_dict에 담아주고
         checkpoint_model = new_dict
 
         # interpolate position embedding
@@ -382,8 +383,11 @@ def main(args, ds_init):
 
         utils.load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
 
+    # model fc_normm, head의 weight를 초기화시켜서 다시 트레이닝 시켜야한다.
+    # load해온 weight들은 전부 freeze시켜줘야 한다.
     model.to(device)
-
+    
+    model = freze_headinitialize_crossattn(model, args.nb_classes)
     model_ema = None
     if args.model_ema:
         model_ema = ModelEma(
