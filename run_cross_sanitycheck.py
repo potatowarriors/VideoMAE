@@ -19,12 +19,11 @@ from optim_factory import create_optimizer, get_parameter_groups, LayerDecayValu
 
 from datasets import build_dataset
 from engine_for_crossattn import train_one_epoch, validation_one_epoch, final_test, merge
-from utils import NativeScalerWithGradNormCount as NativeScaler, freze_headinitialize_crossattn, initialize_fcnorm
+from utils import NativeScalerWithGradNormCount as NativeScaler, freze_headinitialize_crossattn
 from utils import  cross_multiple_samples_collate
 import utils
 import modeling_finetune
 #add new code
-import modeling_crossattn
 import modeling_adst
 
 
@@ -389,11 +388,11 @@ def main(args, ds_init):
     # load해온 weight들은 전부 freeze시켜줘야 한다.
     model.to(device)
     
-    # for reset head, fc_norm.(구현 모듈 검증을 위해)
     nn.init.constant_(model.fc_norm.bias, 0)
     nn.init.constant_(model.fc_norm.weight, 1.0)
     model.reset_classifier(args.nb_classes)
     
+    #model = freze_headinitialize_crossattn(model, args.nb_classes)
     model_ema = None
     if args.model_ema:
         model_ema = ModelEma(

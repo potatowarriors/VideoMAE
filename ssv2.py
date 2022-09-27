@@ -240,6 +240,19 @@ class SSVideoClsDataset(Dataset):
         except:
             print("video cannot be loaded by decord: ", fname)
             return []
+        
+        if self.mode == 'cross_attn_test':
+            all_index = []
+            tick = len(vr) / float(self.num_segment)
+            all_index = list(np.array([int(tick / 2.0 + tick * x) for x in range(self.num_segment)] +
+                               [int(tick * x) for x in range(self.num_segment)]))
+            while len(all_index) < (self.num_segment * self.test_num_segment):
+                all_index.append(all_index[-1])
+            all_index = list(np.sort(np.array(all_index))) 
+            vr.seek(0)
+            buffer = vr.get_batch(all_index).asnumpy()
+            return buffer
+
 
         if self.mode == 'test':
             all_index = []
@@ -295,6 +308,15 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
         self.clip_data_transform = video_transforms.Compose([
             volume_transforms.ToTensor()
         ])
+        import pandas as pd
+        s_cleaned = pd.read_csv(self.s_anno_path, header=None, delimiter=' ')
+        t_cleaned = pd.read_csv(self.t_anno_path, header=None, delimiter=' ')
+        
+        self.s_dataset_samples = list(s_cleaned.values[:, 0])
+        self.t_dataset_samples = list(t_cleaned.values[:, 0])
+        
+        self.label_array = list(t_cleaned.values[:, 1])
+        
         if (mode == 'cross_attn_train'):
             pass
 
@@ -315,25 +337,18 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
                 video_transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                         std=[0.229, 0.224, 0.225])
             ])
-            self.test_seg = []
-            self.test_dataset = []
-            self.test_label_array = []
+            self.t_test_seg = []
+            self.t_test_dataset = []
+            self.t_test_label_array = []
             for ck in range(self.test_num_segment):
                 for cp in range(self.test_num_crop):
                     for idx in range(len(self.label_array)):
                         sample_label = self.label_array[idx]
-                        self.test_label_array.append(sample_label)
-                        self.test_dataset.append(self.dataset_samples[idx])
-                        self.test_seg.append((ck, cp))
+                        self.t_test_label_array.append(sample_label)
+                        self.t_test_dataset.append(self.t_dataset_samples[idx])
+                        self.t_test_seg.append((ck, cp))
         
-        import pandas as pd
-        s_cleaned = pd.read_csv(self.s_anno_path, header=None, delimiter=' ')
-        t_cleaned = pd.read_csv(self.t_anno_path, header=None, delimiter=' ')
         
-        self.s_dataset_samples = list(s_cleaned.values[:, 0])
-        self.t_dataset_samples = list(t_cleaned.values[:, 0])
-        
-        self.label_array = list(t_cleaned.values[:, 1])
         
         
     def __getitem__(self, index):
@@ -347,7 +362,7 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
             buffer = self.loadvideo_decord(t_sample, sample_rate_scale=scale_t) # T H W C
             if len(buffer) == 0:
                 while len(buffer) == 0:
-                    warnings.warn("video {} not correctly loaded during training".format(sample))
+                    warnings.warn("video {} not correctly loaded during training".format(t_sample))
                     index = np.random.randint(self.__len__())
                     t_sample = self.t_dataset_samples[index]
                     buffer = self.loadvideo_decord(t_sample, sample_rate_scale=scale_t)
@@ -372,30 +387,30 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
             s_sample = self.s_dataset_samples[index]
             s_feature = self.clip_data_transform(s_sample)
             t_sample = self.t_dataset_samples[index]
-            buffer = self.loadvideo_decord(t_sample, sample_rate_scale=scale_t)
+            buffer = self.loadvideo_decord(t_sample)
             if len(buffer) == 0:
                 while len(buffer) == 0:
-                    warnings.warn("video {} not correctly loaded during validation".format(sample))
+                    warnings.warn("video {} not correctly loaded during validation".format(t_sample))
                     index = np.random.randint(self.__len__())
                     t_sample = self.t_dataset_samples[index]
                     buffer = self.loadvideo_decord(t_sample)
             buffer = self.data_transform(buffer)
-            return s_feature, buffer, self.label_array[index], sample.split("/")[-1].split(".")[0]
+            return s_feature, buffer, self.label_array[index], t_sample.split("/")[-1].split(".")[0]
 
         elif self.mode == 'cross_attn_test':
             s_sample = self.s_dataset_samples[index]
             s_feature = self.clip_data_transform(s_sample)
-            sample = self.test_dataset[index]
-            chunk_nb, split_nb = self.test_seg[index]
-            buffer = self.loadvideo_decord(sample)
+            t_sample = self.t_test_dataset[index]
+            chunk_nb, split_nb = self.t_test_seg[index]
+            buffer = self.loadvideo_decord(t_sample)
 
             while len(buffer) == 0:
                 warnings.warn("video {}, temporal {}, spatial {} not found during testing".format(\
-                    str(self.test_dataset[index]), chunk_nb, split_nb))
+                    str(self.t_test_dataset[index]), chunk_nb, split_nb))
                 index = np.random.randint(self.__len__())
-                sample = self.test_dataset[index]
-                chunk_nb, split_nb = self.test_seg[index]
-                buffer = self.loadvideo_decord(sample)
+                t_sample = self.t_test_dataset[index]
+                chunk_nb, split_nb = self.t_test_seg[index]
+                buffer = self.loadvideo_decord(t_sample)
 
             buffer = self.data_resize(buffer)
             if isinstance(buffer, list):
@@ -411,14 +426,11 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
             temporal_start = chunk_nb # 0/1
             spatial_start = int(split_nb * spatial_step)
             if buffer.shape[1] >= buffer.shape[2]:
-                buffer = buffer[temporal_start::2, \
-                       spatial_start:spatial_start + self.short_side_size, :, :]
+                buffer = buffer[temporal_start::2, spatial_start:spatial_start + self.short_side_size, :, :]
             else:
-                buffer = buffer[temporal_start::2, \
-                       :, spatial_start:spatial_start + self.short_side_size, :]
-
+                buffer = buffer[temporal_start::2, :, spatial_start:spatial_start + self.short_side_size, :]
             buffer = self.data_transform(buffer)
-            return s_feature, buffer, self.test_label_array[index], sample.split("/")[-1].split(".")[0], \
+            return s_feature, buffer, self.t_test_label_array[index], t_sample.split("/")[-1].split(".")[0], \
                    chunk_nb, split_nb
         else:
             raise NameError('mode {} unkown'.format(self.mode))

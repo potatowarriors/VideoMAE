@@ -14,8 +14,8 @@
                "args" : [
                     "--nproc_per_node", "4",
                     "--master_port", "12320",
-                    "/data/potatowarriors/repos/videomae/VideoMAE/run_cross_finetuning.py",
-                    "--model", "cross_vit_base_patch16_224",
+                    "/data/potatowarriors/repos/videomae/VideoMAE/run_cross_sanitycheck.py",
+                    "--model", "addtemp_vit_base_patch16_224",
                     "--cross_attn",
                     "--data_set", "SSV2",
                     "--nb_classes", "174",
@@ -34,8 +34,8 @@
                     "--opt_betas", "0.9","0.999",
                     "--weight_decay", "0.05",
                     "--dist_eval",
-                    "--test_num_segment", "1",
-                    "--test_num_crop", "1",
+                    "--test_num_segment", "2",
+                    "--test_num_crop", "3",
                     "--enable_deepspeed"
                ]
           }

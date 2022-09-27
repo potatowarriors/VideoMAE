@@ -10,7 +10,7 @@ from timm.models.registry import register_model
 def _cfg(url='', **kwargs):
     return {
         'url': url,
-        'num_classes': 400, 'input_size': (3, 224, 224), 'pool_size': None,
+        'num_classes': 400, 'input_size': (39, 224, 224), 'pool_size': None,
         'crop_pct': .9, 'interpolation': 'bicubic',
         'mean': (0.5, 0.5, 0.5), 'std': (0.5, 0.5, 0.5),
         **kwargs

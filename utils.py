@@ -11,6 +11,7 @@ from torch.utils.data._utils.collate import default_collate
 from pathlib import Path
 import subprocess
 import torch
+import torch.nn as nn
 import torch.distributed as dist
 from torch._six import inf
 import random
@@ -567,15 +568,20 @@ def cross_multiple_samples_collate(batch, fold=False):
         return s_inputs, t_inputs, labels, video_idx, extra_data
     
 def freze_headinitialize_crossattn(model, nb_classes):
-    model.reset_classifier(nb_classes)
-    block_list = ['t_norm2','cross','norm3', 'fc_norm', 'head', 'pos_embed', 'patch_embed']
+    block_list = ['fc_norm', 'head']
     for name, param in model.named_parameters():
         for block in block_list:
             if block in name:
-                param.requires_grad = True
+                param.requires_gr
                 break
             else:
                 param.requires_grad = False
-    
-    
     return model
+
+def initialize_fcnorm(model):
+    initialize_list = ['fc_norm','head']
+    for name, param in model.named_parameters():
+        for block in initialize_list:
+            if block in name:
+                nn.init.constant_(param.bias, 0)
+                nn.init.constant_(param.weight, 1.0)
