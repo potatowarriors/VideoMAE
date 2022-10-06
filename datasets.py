@@ -109,10 +109,10 @@ def build_dataset(is_train, test_mode, args):
             if args.cross_attn is True:
                 mode = 'cross_attn_val'
                 s_anno_path = os.path.join(args.data_path, 'feature_clip_val.csv')
-                t_anno_path = os.path.join(args.data_path, 'test_mp4.csv')
+                t_anno_path = os.path.join(args.data_path, 'val_mp4.csv')
             else:
                 mode = 'val'
-                anno_path = os.path.join(args.data_path, 'test_mp4.csv')
+                anno_path = os.path.join(args.data_path, 'val_mp4.csv')
         
         if args.cross_attn is True:
             dataset = CrossSSVideoClsDataset(
@@ -148,6 +148,36 @@ def build_dataset(is_train, test_mode, args):
                 new_width=320,
                 args=args)
             nb_classes = 174
+    
+    elif args.data_set =='MINI_SSV2':
+        mode = None
+        anno_path = None
+        if is_train is True:
+            mode = 'train'
+            anno_path = os.path.join(args.data_path, 'mini_train_mp4.csv')
+        elif test_mode is True:
+            mode = 'test'
+            anno_path = os.path.join(args.data_path, 'mini_test_mp4.csv')
+        else:
+            mode = 'val'
+            anno_path = os.path.join(args.data_path, 'mini_val_mp4.csv')
+
+        dataset = SSVideoClsDataset(
+                anno_path=anno_path,
+                data_path='/',
+                mode=mode,
+                clip_len=1,
+                num_segment=args.num_frames,
+                test_num_segment=args.test_num_segment,
+                test_num_crop=args.test_num_crop,
+                num_crop=1 if not test_mode else 3,
+                keep_aspect_ratio=True,
+                crop_size=args.input_size,
+                short_side_size=args.short_side_size,
+                new_height=256,
+                new_width=320,
+                args=args)
+        nb_classes = 87
 
     elif args.data_set == 'UCF101':
         mode = None

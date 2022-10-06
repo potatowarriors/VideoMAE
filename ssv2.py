@@ -282,7 +282,7 @@ class SSVideoClsDataset(Dataset):
         return buffer
 
     def __len__(self):
-        if self.mode != 'test':
+        if self.mode != 'test' or self.mode != 'cross_attn_test':
             return len(self.dataset_samples)
         else:
             return len(self.test_dataset)
@@ -337,6 +337,7 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
                 video_transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                         std=[0.229, 0.224, 0.225])
             ])
+            self.s_test_dataset = []
             self.t_test_seg = []
             self.t_test_dataset = []
             self.t_test_label_array = []
@@ -346,11 +347,10 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
                         sample_label = self.label_array[idx]
                         self.t_test_label_array.append(sample_label)
                         self.t_test_dataset.append(self.t_dataset_samples[idx])
+                        # view 수만큼 spatial_feature도 늘려준다.
+                        self.s_test_dataset.append(self.s_dataset_samples[idx])
                         self.t_test_seg.append((ck, cp))
-        
-        
-        
-        
+
     def __getitem__(self, index):
         if self.mode == 'cross_attn_train':
             args = self.args
@@ -398,7 +398,7 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
             return s_feature, buffer, self.label_array[index], t_sample.split("/")[-1].split(".")[0]
 
         elif self.mode == 'cross_attn_test':
-            s_sample = self.s_dataset_samples[index]
+            s_sample = self.s_test_dataset[index]
             s_feature = self.clip_data_transform(s_sample)
             t_sample = self.t_test_dataset[index]
             chunk_nb, split_nb = self.t_test_seg[index]
@@ -434,6 +434,12 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
                    chunk_nb, split_nb
         else:
             raise NameError('mode {} unkown'.format(self.mode))
+            
+    def __len__(self):
+        if self.mode != 'cross_attn_test':
+            return len(self.t_dataset_samples)
+        else:
+            return len(self.t_test_dataset)
 
 
 def spatial_sampling(

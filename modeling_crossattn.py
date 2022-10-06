@@ -211,10 +211,12 @@ class CrossBlock(nn.Module):
 
     def forward(self,s_x ,t_x):
         if self.gamma_1 is None:
-            t_x = t_x + self.cross(s_x, self.cross_norm1(t_x))
+            t_x = self.cross_norm1(t_x)
+            t_x = t_x + self.cross(s_x, t_x)
             t_x = t_x + self.cross_mlp(self.cross_norm2(t_x))
         else:
-            t_x = t_x + self.gamma_1 * self.cross(s_x ,self.cross_norm1(t_x))
+            t_x = self.cross_norm1(t_x)
+            t_x = t_x + self.gamma_1 * self.cross(s_x, t_x)
             t_x = t_x + self.gamma_2 * self.cross_mlp(self.cross_norm2(t_x))
         return t_x
 
@@ -370,8 +372,7 @@ class CrossTransformer(nn.Module):
 
 
     def forward(self, s_x, t_x):
-        with torch.no_grad():
-            t_x = self.forward_features(t_x)
+        t_x = self.forward_features(t_x)
         t_x = self.cross_block(s_x, t_x)
         if self.fc_norm is not None:
             t_x = self.fc_norm(t_x.mean(1))

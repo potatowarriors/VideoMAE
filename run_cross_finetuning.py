@@ -19,13 +19,12 @@ from optim_factory import create_optimizer, get_parameter_groups, LayerDecayValu
 
 from datasets import build_dataset
 from engine_for_crossattn import train_one_epoch, validation_one_epoch, final_test, merge
-from utils import NativeScalerWithGradNormCount as NativeScaler, freze_headinitialize_crossattn, initialize_fcnorm
+from utils import NativeScalerWithGradNormCount as NativeScaler, change_verification_mode, freze_headinitialize_crossattn
 from utils import  cross_multiple_samples_collate
 import utils
 import modeling_finetune
 #add new code
 import modeling_crossattn
-import modeling_adst
 
 
 def get_args():
@@ -250,6 +249,7 @@ def main(args, ds_init):
             dataset_test, num_replicas=num_tasks, rank=global_rank, shuffle=False)
     else:
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+        sampler_test = torch.utils.data.SequentialSampler(dataset_test)
 
     if global_rank == 0 and args.log_dir is not None:
         os.makedirs(args.log_dir, exist_ok=True)
@@ -385,15 +385,10 @@ def main(args, ds_init):
 
         utils.load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
 
-    # model fc_normm, head의 weight를 초기화시켜서 다시 트레이닝 시켜야한다.
-    # load해온 weight들은 전부 freeze시켜줘야 한다.
-    model.to(device)
-    
-    # for reset head, fc_norm.(구현 모듈 검증을 위해)
-    nn.init.constant_(model.fc_norm.bias, 0)
-    nn.init.constant_(model.fc_norm.weight, 1.0)
-    model.reset_classifier(args.nb_classes)
-    
+    if not args.eval:
+        # add cross block, fc_norm, head initialize weights
+        change_verification_mode(model, args.nb_classes)
+        model.to(device).half()
     model_ema = None
     if args.model_ema:
         model_ema = ModelEma(
@@ -479,6 +474,7 @@ def main(args, ds_init):
     utils.auto_load_model(
         args=args, model=model, model_without_ddp=model_without_ddp,
         optimizer=optimizer, loss_scaler=loss_scaler, model_ema=model_ema)
+    
 
     if args.eval:
         preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')

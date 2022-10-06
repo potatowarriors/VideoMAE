@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 import datetime
 import numpy as np
 from timm.utils import get_state_dict
+from timm.models.layers import trunc_normal_
 from torch.utils.data._utils.collate import default_collate
 from pathlib import Path
 import subprocess
@@ -256,25 +257,21 @@ def init_distributed_mode(args):
         os.environ['LOCAL_RANK'] = str(args.gpu)
         os.environ['RANK'] = str(args.rank)
         os.environ['WORLD_SIZE'] = str(args.world_size)
-    # elif 'SLURM_PROCID' in os.environ:
-    #     args.rank = int(os.environ['SLURM_PROCID'])
-    #     print('strat args.rank :', args.rank)
-    #     args.gpu = int(os.environ['SLURM_LOCALID'])
-    #     print('strat args.gpu:',  args.gpu)
-    #     args.world_size = int(os.environ['SLURM_NTASKS'])
-    #     print('strat args.world_size:', args.world_size)
-    #     os.environ['RANK'] = str(args.rank)
-    #     os.environ['LOCAL_RANK'] = str(args.gpu)
-    #     os.environ['WORLD_SIZE'] = str(args.world_size)
+    elif 'SLURM_PROCID' in os.environ:
+        if "WORLD_SIZE" in os.environ:
+            args.world_size = int(os.environ["WORLD_SIZE"])
+        ngpus_per_node = torch.cuda.device_count()
+        args.rank = int(os.environ['SLURM_PROCID'])
+        args.gpu = args.rank % torch.cuda.device_count()
+        args.world_size = int(os.environ['SLURM_NTASKS'])
+        # os.environ['RANK'] = str(args.rank)
+        # os.environ['LOCAL_RANK'] = str(args.gpu)
+        # os.environ['WORLD_SIZE'] = str(args.world_size)
 
-    #     node_list = os.environ['SLURM_NODELIST']
-    #     print('node list:', node_list)
-    #     addr = subprocess.getoutput(
-    #         f'scontrol show hostname {node_list} | head -n1')
-    #     print('addr:', addr)
-    #     if 'MASTER_ADDR' not in os.environ:
-    #         print('no masteraddr')
-    #         os.environ['MASTER_ADDR'] = addr
+        node_list = os.environ['SLURM_NODELIST']
+        addr = subprocess.getoutput(
+            f'scontrol show hostname {node_list} | head -n1')
+        os.environ['MASTER_ADDR'] = addr
     elif 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
         args.rank = int(os.environ["RANK"])
         args.world_size = int(os.environ['WORLD_SIZE'])
@@ -572,16 +569,29 @@ def freze_headinitialize_crossattn(model, nb_classes):
     for name, param in model.named_parameters():
         for block in block_list:
             if block in name:
-                param.requires_gr
+                param.requires_grad = False
                 break
             else:
                 param.requires_grad = False
     return model
-
-def initialize_fcnorm(model):
-    initialize_list = ['fc_norm','head']
+                
+def change_verification_mode(model, nb_classes):
+    # freeze all parameters
+    unfreeze_list = ['cross_block', 'fc_norm', 'head']
     for name, param in model.named_parameters():
-        for block in initialize_list:
+        for block in unfreeze_list:
             if block in name:
-                nn.init.constant_(param.bias, 0)
-                nn.init.constant_(param.weight, 1.0)
+                param.requires_grad = True
+                break
+            else:
+                param.requires_grad = False
+
+    
+    # inintialize fc_norm
+    nn.init.constant_(model.fc_norm.bias, 0)
+    nn.init.constant_(model.fc_norm.weight, 1.0)
+    
+    #reset head
+    trunc_normal_(model.head.weight, std=.02)
+    nn.init.constant_(model.head.bias, 0)
+    
