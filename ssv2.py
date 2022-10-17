@@ -282,18 +282,31 @@ class SSVideoClsDataset(Dataset):
         return buffer
 
     def __len__(self):
-        if self.mode != 'test' or self.mode != 'cross_attn_test':
+        if self.mode != 'test':
             return len(self.dataset_samples)
         else:
             return len(self.test_dataset)
 
-class CrossSSVideoClsDataset(SSVideoClsDataset):
+class CrossSSVideoClsDataset(Dataset):
     
-    def __init__(self, s_anno_path, t_anno_path, mode='train', clip_len=8,
-                 crop_size=224, short_side_size=256, new_height=256, new_width=340, keep_aspect_ratio=True,
-                 num_segment=1, num_crop=1, test_num_segment=10, test_num_crop=3, args=None):
-        super().__init__(s_anno_path, t_anno_path, mode, clip_len, crop_size, short_side_size, new_height, new_width,
-                         keep_aspect_ratio, num_segment, num_crop, test_num_segment, test_num_crop, args)
+    def __init__(self, anno_path, data_path, mode='train', clip_len=8,
+                crop_size=224, short_side_size=256, new_height=256,
+                new_width=340, keep_aspect_ratio=True, num_segment=1,
+                num_crop=1, test_num_segment=10, test_num_crop=3, args=None):
+        self.anno_path = anno_path
+        self.data_path = data_path
+        self.mode = mode
+        self.clip_len = clip_len
+        self.crop_size = crop_size
+        self.short_side_size = short_side_size
+        self.new_height = new_height
+        self.new_width = new_width
+        self.keep_aspect_ratio = keep_aspect_ratio
+        self.num_segment = num_segment
+        self.test_num_segment = test_num_segment
+        self.num_crop = num_crop
+        self.test_num_crop = test_num_crop
+        self.args = args
         self.aug = False
         self.rand_erase = False
         if self.mode in ['train']:
@@ -303,24 +316,20 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
         if VideoReader is None:
             raise ImportError("Unable to import `decord` which is required to read videos.")
         
-        self.s_anno_path = s_anno_path
-        self.t_anno_path = t_anno_path
+        self.anno_path = anno_path
         self.clip_data_transform = video_transforms.Compose([
             volume_transforms.ToTensor()
         ])
         import pandas as pd
-        s_cleaned = pd.read_csv(self.s_anno_path, header=None, delimiter=' ')
-        t_cleaned = pd.read_csv(self.t_anno_path, header=None, delimiter=' ')
+        cleaned = pd.read_csv(self.anno_path, header=None, delimiter=' ')
         
-        self.s_dataset_samples = list(s_cleaned.values[:, 0])
-        self.t_dataset_samples = list(t_cleaned.values[:, 0])
+        self.dataset_samples = list(cleaned.values[:, 0])
+        self.label_array = list(cleaned.values[:, 1])
         
-        self.label_array = list(t_cleaned.values[:, 1])
-        
-        if (mode == 'cross_attn_train'):
+        if (mode == 'train'):
             pass
 
-        elif (mode == 'cross_attn_val'):
+        elif (mode == 'validation'):
             self.data_transform = video_transforms.Compose([
                 video_transforms.Resize(self.short_side_size, interpolation='bilinear'),
                 video_transforms.CenterCrop(size=(self.crop_size, self.crop_size)),
@@ -328,7 +337,7 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
                 video_transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                         std=[0.229, 0.224, 0.225])
             ])
-        elif mode == 'cross_attn_test':
+        elif mode == 'test':
             self.data_resize = video_transforms.Compose([
                 video_transforms.Resize(size=(short_side_size), interpolation='bilinear')
             ])
@@ -346,25 +355,22 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
                     for idx in range(len(self.label_array)):
                         sample_label = self.label_array[idx]
                         self.t_test_label_array.append(sample_label)
-                        self.t_test_dataset.append(self.t_dataset_samples[idx])
+                        self.t_test_dataset.append(self.dataset_samples[idx])
                         # view 수만큼 spatial_feature도 늘려준다.
-                        self.s_test_dataset.append(self.s_dataset_samples[idx])
+                        self.s_test_dataset.append(self.dataset_samples[idx])
                         self.t_test_seg.append((ck, cp))
 
     def __getitem__(self, index):
-        if self.mode == 'cross_attn_train':
+        if self.mode == 'train':
             args = self.args
             scale_t = 1
-
-            s_sample = self.s_dataset_samples[index]
-            s_feature = self.clip_data_transform(s_sample)
-            t_sample = self.t_dataset_samples[index]
-            buffer = self.loadvideo_decord(t_sample, sample_rate_scale=scale_t) # T H W C
+            sample = self.dataset_samples[index]
+            buffer = self.loadvideo_decord(sample, sample_rate_scale=scale_t) # T H W C
             if len(buffer) == 0:
                 while len(buffer) == 0:
                     warnings.warn("video {} not correctly loaded during training".format(t_sample))
                     index = np.random.randint(self.__len__())
-                    t_sample = self.t_dataset_samples[index]
+                    sample = self.dataset_samples[index]
                     buffer = self.loadvideo_decord(t_sample, sample_rate_scale=scale_t)
 
             if args.num_sample > 1:
@@ -380,10 +386,13 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
                 return s_feature, frame_list, label_list, index_list, {}
             else:
                 buffer = self._aug_frame(buffer, args)
+                
+            # augmented center frame pick for extract CLIP eoncded featrue
+            center_frame = buffer[buffer.shape[0]//2, :, :, :]
             
-            return s_feature ,buffer, self.label_array[index], index, {}
+            return center_frame, buffer, self.label_array[index], index, {}
         
-        elif self.mode == 'cross_attn_val':
+        elif self.mode == 'validation':
             s_sample = self.s_dataset_samples[index]
             s_feature = self.clip_data_transform(s_sample)
             t_sample = self.t_dataset_samples[index]
@@ -397,7 +406,7 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
             buffer = self.data_transform(buffer)
             return s_feature, buffer, self.label_array[index], t_sample.split("/")[-1].split(".")[0]
 
-        elif self.mode == 'cross_attn_test':
+        elif self.mode == 'test':
             s_sample = self.s_test_dataset[index]
             s_feature = self.clip_data_transform(s_sample)
             t_sample = self.t_test_dataset[index]
@@ -434,10 +443,71 @@ class CrossSSVideoClsDataset(SSVideoClsDataset):
                    chunk_nb, split_nb
         else:
             raise NameError('mode {} unkown'.format(self.mode))
+        
+    def loadvideo_decord(self, sample, sample_rate_scale=1):
+        """Load video content using Decord"""
+        fname = sample
+
+        if not (os.path.exists(fname)):
+            return []
+
+        # avoid hanging issue
+        if os.path.getsize(fname) < 1 * 1024:
+            print('SKIP: ', fname, " - ", os.path.getsize(fname))
+            return []
+        try:
+            if self.keep_aspect_ratio:
+                vr = VideoReader(fname, num_threads=1, ctx=cpu(0))
+            else:
+                vr = VideoReader(fname, width=self.new_width, height=self.new_height,
+                                 num_threads=1, ctx=cpu(0))
+        except:
+            print("video cannot be loaded by decord: ", fname)
+            return []
+        
+        if self.mode == 'cross_attn_test':
+            all_index = []
+            tick = len(vr) / float(self.num_segment)
+            all_index = list(np.array([int(tick / 2.0 + tick * x) for x in range(self.num_segment)] +
+                               [int(tick * x) for x in range(self.num_segment)]))
+            while len(all_index) < (self.num_segment * self.test_num_segment):
+                all_index.append(all_index[-1])
+            all_index = list(np.sort(np.array(all_index))) 
+            vr.seek(0)
+            buffer = vr.get_batch(all_index).asnumpy()
+            return buffer
+
+
+        if self.mode == 'test':
+            all_index = []
+            tick = len(vr) / float(self.num_segment)
+            all_index = list(np.array([int(tick / 2.0 + tick * x) for x in range(self.num_segment)] +
+                               [int(tick * x) for x in range(self.num_segment)]))
+            while len(all_index) < (self.num_segment * self.test_num_segment):
+                all_index.append(all_index[-1])
+            all_index = list(np.sort(np.array(all_index))) 
+            vr.seek(0)
+            buffer = vr.get_batch(all_index).asnumpy()
+            return buffer
+
+        # handle temporal segments
+        average_duration = len(vr) // self.num_segment
+        all_index = []
+        if average_duration > 0:
+            all_index += list(np.multiply(list(range(self.num_segment)), average_duration) + np.random.randint(average_duration,
+                                                                                                        size=self.num_segment))
+        elif len(vr) > self.num_segment:
+            all_index += list(np.sort(np.random.randint(len(vr), size=self.num_segment)))
+        else:
+            all_index += list(np.zeros((self.num_segment,)))
+        all_index = list(np.array(all_index)) 
+        vr.seek(0)
+        buffer = vr.get_batch(all_index).asnumpy()
+        return buffer
             
     def __len__(self):
-        if self.mode != 'cross_attn_test':
-            return len(self.t_dataset_samples)
+        if self.mode != 'test':
+            return len(self.dataset_samples)
         else:
             return len(self.t_test_dataset)
 

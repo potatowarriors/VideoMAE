@@ -90,34 +90,18 @@ def build_dataset(is_train, test_mode, args):
         mode = None
         anno_path = None
         if is_train is True:
-            if args.cross_attn is True:
-                mode = 'cross_attn_train'
-                s_anno_path = os.path.join(args.data_path, 'feature_clip_train.csv')
-                t_anno_path = os.path.join(args.data_path, 'train_mp4.csv')
-            else:
-                mode = 'train'
-                anno_path = os.path.join(args.data_path, 'train_mp4.csv')
+            mode = 'train'
+            anno_path = os.path.join(args.data_path, 'train_mp4.csv')
         elif test_mode is True:
-            if args.cross_attn is True:
-                mode = 'cross_attn_test'
-                s_anno_path = os.path.join(args.data_path, 'feature_clip_test.csv')
-                t_anno_path = os.path.join(args.data_path, 'test_mp4.csv')
-            else:
-                mode = 'test'
-                anno_path = os.path.join(args.data_path, 'test_mp4.csv')
+            mode = 'test'
+            anno_path = os.path.join(args.data_path, 'test_mp4.csv')
         else:
-            if args.cross_attn is True:
-                mode = 'cross_attn_val'
-                s_anno_path = os.path.join(args.data_path, 'feature_clip_val.csv')
-                t_anno_path = os.path.join(args.data_path, 'val_mp4.csv')
-            else:
-                mode = 'val'
-                anno_path = os.path.join(args.data_path, 'val_mp4.csv')
+            mode = 'val'
+            anno_path = os.path.join(args.data_path, 'val_mp4.csv')
         
         if args.cross_attn is True:
             dataset = CrossSSVideoClsDataset(
-                s_anno_path=s_anno_path,
-                t_anno_path=t_anno_path,
+                anno_path=anno_path,
                 mode = mode,
                 clip_len=1,
                 num_segment=args.num_frames,
@@ -159,13 +143,14 @@ def build_dataset(is_train, test_mode, args):
             mode = 'test'
             anno_path = os.path.join(args.data_path, 'mini_test_mp4.csv')
         else:
-            mode = 'val'
+            mode = 'validation'
             anno_path = os.path.join(args.data_path, 'mini_val_mp4.csv')
-
-        dataset = SSVideoClsDataset(
+        
+        if args.cross_attn is True:
+            dataset = CrossSSVideoClsDataset(
                 anno_path=anno_path,
                 data_path='/',
-                mode=mode,
+                mode = mode,
                 clip_len=1,
                 num_segment=args.num_frames,
                 test_num_segment=args.test_num_segment,
@@ -177,7 +162,24 @@ def build_dataset(is_train, test_mode, args):
                 new_height=256,
                 new_width=320,
                 args=args)
-        nb_classes = 87
+            nb_classes=87           
+        else:
+            dataset = SSVideoClsDataset(
+                    anno_path=anno_path,
+                    data_path='/',
+                    mode=mode,
+                    clip_len=1,
+                    num_segment=args.num_frames,
+                    test_num_segment=args.test_num_segment,
+                    test_num_crop=args.test_num_crop,
+                    num_crop=1 if not test_mode else 3,
+                    keep_aspect_ratio=True,
+                    crop_size=args.input_size,
+                    short_side_size=args.short_side_size,
+                    new_height=256,
+                    new_width=320,
+                    args=args)
+            nb_classes = 87
 
     elif args.data_set == 'UCF101':
         mode = None

@@ -37,7 +37,7 @@ def get_args():
     parser.add_argument('--cross_attn', action='store_true', default=False)
 
     # Model parameters
-    parser.add_argument('--model', default='addtemp_vit_base_patch16_224', type=str, metavar='MODEL',
+    parser.add_argument('--model', default='cross_vit_base_patch16_224', type=str, metavar='MODEL',
                         help='Name of model to train')
     parser.add_argument('--tubelet_size', type=int, default= 2)
     parser.add_argument('--input_size', default=224, type=int,
@@ -148,7 +148,7 @@ def get_args():
     parser.add_argument('--num_segments', type=int, default= 1)
     parser.add_argument('--num_frames', type=int, default= 16)
     parser.add_argument('--sampling_rate', type=int, default= 4)
-    parser.add_argument('--data_set', default='Kinetics-400', choices=['Kinetics-400', 'SSV2', 'UCF101', 'HMDB51','image_folder'],
+    parser.add_argument('--data_set', default='Kinetics-400', choices=['Kinetics-400', 'SSV2','MINI_SSV2', 'UCF101', 'HMDB51','image_folder'],
                         type=str, help='dataset')
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
