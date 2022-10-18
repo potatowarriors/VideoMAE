@@ -8,7 +8,6 @@ from mixup import Mixup
 from timm.utils import accuracy, ModelEma
 import utils
 from scipy.special import softmax
-from torchviz import make_dot
 
 def cross_train_class_batch(model, s_samples, t_samples, target, criterion):
     outputs = model(s_samples, t_samples)

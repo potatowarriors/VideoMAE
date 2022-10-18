@@ -346,19 +346,16 @@ class CrossSSVideoClsDataset(Dataset):
                 video_transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                         std=[0.229, 0.224, 0.225])
             ])
-            self.s_test_dataset = []
-            self.t_test_seg = []
-            self.t_test_dataset = []
-            self.t_test_label_array = []
+            self.test_seg = []
+            self.test_dataset = []
+            self.test_label_array = []
             for ck in range(self.test_num_segment):
                 for cp in range(self.test_num_crop):
                     for idx in range(len(self.label_array)):
                         sample_label = self.label_array[idx]
-                        self.t_test_label_array.append(sample_label)
-                        self.t_test_dataset.append(self.dataset_samples[idx])
-                        # view 수만큼 spatial_feature도 늘려준다.
-                        self.s_test_dataset.append(self.dataset_samples[idx])
-                        self.t_test_seg.append((ck, cp))
+                        self.test_label_array.append(sample_label)
+                        self.test_dataset.append(self.dataset_samples[idx])
+                        self.test_seg.append((ck, cp))
 
     def __getitem__(self, index):
         if self.mode == 'train':
@@ -368,10 +365,10 @@ class CrossSSVideoClsDataset(Dataset):
             buffer = self.loadvideo_decord(sample, sample_rate_scale=scale_t) # T H W C
             if len(buffer) == 0:
                 while len(buffer) == 0:
-                    warnings.warn("video {} not correctly loaded during training".format(t_sample))
+                    warnings.warn("video {} not correctly loaded during training".format(sample))
                     index = np.random.randint(self.__len__())
                     sample = self.dataset_samples[index]
-                    buffer = self.loadvideo_decord(t_sample, sample_rate_scale=scale_t)
+                    buffer = self.loadvideo_decord(sample, sample_rate_scale=scale_t)
 
             if args.num_sample > 1:
                 frame_list = []
@@ -383,43 +380,41 @@ class CrossSSVideoClsDataset(Dataset):
                     frame_list.append(new_frames)
                     label_list.append(label)
                     index_list.append(index)
-                return s_feature, frame_list, label_list, index_list, {}
+                    center_frame = buffer[:, buffer.shape[0]//2, :, :]
+                return center_frame, frame_list, label_list, index_list, {}
             else:
                 buffer = self._aug_frame(buffer, args)
                 
             # augmented center frame pick for extract CLIP eoncded featrue
-            center_frame = buffer[buffer.shape[0]//2, :, :, :]
+            center_frame = buffer[:, buffer.shape[1]//2, :, :]
             
             return center_frame, buffer, self.label_array[index], index, {}
         
         elif self.mode == 'validation':
-            s_sample = self.s_dataset_samples[index]
-            s_feature = self.clip_data_transform(s_sample)
-            t_sample = self.t_dataset_samples[index]
-            buffer = self.loadvideo_decord(t_sample)
+            sample = self.dataset_samples[index]
+            buffer = self.loadvideo_decord(sample)
             if len(buffer) == 0:
                 while len(buffer) == 0:
-                    warnings.warn("video {} not correctly loaded during validation".format(t_sample))
+                    warnings.warn("video {} not correctly loaded during validation".format(sample))
                     index = np.random.randint(self.__len__())
-                    t_sample = self.t_dataset_samples[index]
-                    buffer = self.loadvideo_decord(t_sample)
+                    sample = self.dataset_samples[index]
+                    buffer = self.loadvideo_decord(sample)
+            center_frame = buffer[buffer.shape[0]//2, :, :, :]
             buffer = self.data_transform(buffer)
-            return s_feature, buffer, self.label_array[index], t_sample.split("/")[-1].split(".")[0]
+            return center_frame, buffer, self.label_array[index], sample.split("/")[-1].split(".")[0]
 
         elif self.mode == 'test':
-            s_sample = self.s_test_dataset[index]
-            s_feature = self.clip_data_transform(s_sample)
-            t_sample = self.t_test_dataset[index]
-            chunk_nb, split_nb = self.t_test_seg[index]
-            buffer = self.loadvideo_decord(t_sample)
+            sample = self.test_dataset[index]
+            chunk_nb, split_nb = self.test_seg[index]
+            buffer = self.loadvideo_decord(sample)
 
             while len(buffer) == 0:
                 warnings.warn("video {}, temporal {}, spatial {} not found during testing".format(\
-                    str(self.t_test_dataset[index]), chunk_nb, split_nb))
+                    str(self.test_dataset[index]), chunk_nb, split_nb))
                 index = np.random.randint(self.__len__())
-                t_sample = self.t_test_dataset[index]
+                sample = self.test_dataset[index]
                 chunk_nb, split_nb = self.t_test_seg[index]
-                buffer = self.loadvideo_decord(t_sample)
+                buffer = self.loadvideo_decord(sample)
 
             buffer = self.data_resize(buffer)
             if isinstance(buffer, list):
@@ -438,11 +433,74 @@ class CrossSSVideoClsDataset(Dataset):
                 buffer = buffer[temporal_start::2, spatial_start:spatial_start + self.short_side_size, :, :]
             else:
                 buffer = buffer[temporal_start::2, :, spatial_start:spatial_start + self.short_side_size, :]
+            
+            center_frame = buffer[buffer.shape[0]//2, :, :, :]
             buffer = self.data_transform(buffer)
-            return s_feature, buffer, self.t_test_label_array[index], t_sample.split("/")[-1].split(".")[0], \
+            return center_frame, buffer, self.test_label_array[index], sample.split("/")[-1].split(".")[0], \
                    chunk_nb, split_nb
         else:
             raise NameError('mode {} unkown'.format(self.mode))
+        
+    def _aug_frame(
+        self,
+        buffer,
+        args,
+    ):
+
+        aug_transform = video_transforms.create_random_augment(
+            input_size=(self.crop_size, self.crop_size),
+            auto_augment=args.aa,
+            interpolation=args.train_interpolation,
+        )
+
+        buffer = [
+            transforms.ToPILImage()(frame) for frame in buffer
+        ]
+
+        buffer = aug_transform(buffer)
+
+        buffer = [transforms.ToTensor()(img) for img in buffer]
+        buffer = torch.stack(buffer) # T C H W
+        buffer = buffer.permute(0, 2, 3, 1) # T H W C 
+        
+        # T H W C 
+        buffer = tensor_normalize(
+            buffer, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+        )
+        # T H W C -> C T H W.
+        buffer = buffer.permute(3, 0, 1, 2)
+        # Perform data augmentation.
+        scl, asp = (
+            [0.08, 1.0],
+            [0.75, 1.3333],
+        )
+
+        buffer = spatial_sampling(
+            buffer,
+            spatial_idx=-1,
+            min_scale=256,
+            max_scale=320,
+            crop_size=self.crop_size,
+            random_horizontal_flip=False if args.data_set == 'SSV2' else True,
+            inverse_uniform_sampling=False,
+            aspect_ratio=asp,
+            scale=scl,
+            motion_shift=False
+        )
+
+        if self.rand_erase:
+            erase_transform = RandomErasing(
+                args.reprob,
+                mode=args.remode,
+                max_count=args.recount,
+                num_splits=args.recount,
+                device="cpu",
+            )
+            buffer = buffer.permute(1, 0, 2, 3)
+            buffer = erase_transform(buffer)
+            buffer = buffer.permute(1, 0, 2, 3)
+
+        return buffer
         
     def loadvideo_decord(self, sample, sample_rate_scale=1):
         """Load video content using Decord"""
@@ -509,7 +567,7 @@ class CrossSSVideoClsDataset(Dataset):
         if self.mode != 'test':
             return len(self.dataset_samples)
         else:
-            return len(self.t_test_dataset)
+            return len(self.test_dataset)
 
 
 def spatial_sampling(

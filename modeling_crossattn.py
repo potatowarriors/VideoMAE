@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from timm.models.layers import drop_path, to_2tuple, trunc_normal_
 from timm.models.registry import register_model
+import clip
 
 
 def _cfg(url='', **kwargs):
@@ -166,59 +167,34 @@ class Block(nn.Module):
         self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
+        self.norm2 = norm_layer(dim)
+        self.cross = CrossAttention(
+            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+            attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.norm2 = norm_layer(dim)
+        self.norm3 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
         if init_values > 0:
             self.gamma_1 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
             self.gamma_2 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
+            self.gamma_3 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
         else:
-            self.gamma_1, self.gamma_2 = None, None
+            self.gamma_1, self.gamma_2, self.gamma_3 = None, None, None
 
-    def forward(self, x):
+    def forward(self,s_x, t_x):
         if self.gamma_1 is None:
-            x = x + self.drop_path(self.attn(self.norm1(x)))
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            t_x = t_x + self.drop_path(self.attn(self.norm1(t_x)))
+            t_x = t_x + self.drop_path(self.cross(s_x, self.norm2(t_x)))
+            t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x)))
         else:
-            x = x + self.drop_path(self.gamma_1 * self.attn(self.norm1(x)))
-            x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
-        return x
-
-class CrossBlock(nn.Module):
-    
-    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 init_values=None, act_layer=nn.GELU, norm_layer=nn.LayerNorm,
-                 attn_head_dim=None):
-        super().__init__()
-        self.cross_norm1 = norm_layer(dim)
-        self.cross = CrossAttention(dim=dim, num_heads=num_heads, qkv_bias=False, qk_scale=None, attn_drop=0,
-                       proj_drop=0., attn_head_dim=None)
-        # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
-        # 추가한 block이므로 droppath는 잠깐 꺼준다.
-        # self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.cross_norm2 = norm_layer(dim)
-        mlp_hidden_dim = int(dim * mlp_ratio)
-        self.cross_mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
-
-        if init_values > 0:
-            self.gamma_1 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
-            self.gamma_2 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
-        else:
-            self.gamma_1, self.gamma_2 = None, None
-
-    def forward(self,s_x ,t_x):
-        if self.gamma_1 is None:
-            t_x = self.cross_norm1(t_x)
-            t_x = t_x + self.cross(s_x, t_x)
-            t_x = t_x + self.cross_mlp(self.cross_norm2(t_x))
-        else:
-            t_x = self.cross_norm1(t_x)
-            t_x = t_x + self.gamma_1 * self.cross(s_x, t_x)
-            t_x = t_x + self.gamma_2 * self.cross_mlp(self.cross_norm2(t_x))
+            t_x = t_x + self.drop_path(self.gamma_1 * self.attn(self.norm1(t_x)))
+            t_x = t_x + self.drop_path(self.gamma_2 * self.cross(s_x, self.norm2(t_x)))
+            t_x = t_x + self.drop_path(self.gamma_3 * self.mlp(self.norm2(t_x)))
         return t_x
+
 
 
 class PatchEmbed(nn.Module):
@@ -311,8 +287,6 @@ class CrossTransformer(nn.Module):
                 drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,
                 init_values=init_values)
             for i in range(depth)])
-        self.cross_block = CrossBlock(dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                drop=drop_rate, attn_drop=attn_drop_rate, norm_layer=norm_layer, init_values=init_values)
         self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
         self.fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
         self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
@@ -351,17 +325,28 @@ class CrossTransformer(nn.Module):
     
     def reset_fcnorm(self):
         self.fc_norm = nn.LayerNorm(self.embed_dim)
+        
+    # for extract clip feature
+    def extract_clip_feature(self, s_x):
+        clip_model, _ = clip.load('ViT-B/32', device='cuda')
+        # make 768 hiddendim vector
+        clip_model.visual.proj = None
+        with torch.no_grad():
+            s_x = clip_model.encode_image(s_x)
+        return s_x
 
-    def forward_features(self, t_x):
+    def forward_features(self,s_x ,t_x):
         t_x = self.patch_embed(t_x)
         B, _, _ = t_x.size()
 
         if self.pos_embed is not None:
             t_x = t_x + self.pos_embed.expand(B, -1, -1).type_as(t_x).to(t_x.device).clone().detach()
         t_x = self.pos_drop(t_x)
+        
+        s_x = self.extract_clip_feature(s_x)
 
         for blk in self.blocks:
-            t_x = blk(t_x)
+            t_x = blk(s_x, t_x)
 
         t_x = self.norm(t_x)
         
@@ -372,8 +357,7 @@ class CrossTransformer(nn.Module):
 
 
     def forward(self, s_x, t_x):
-        t_x = self.forward_features(t_x)
-        t_x = self.cross_block(s_x, t_x)
+        t_x = self.forward_features(s_x, t_x)
         if self.fc_norm is not None:
             t_x = self.fc_norm(t_x.mean(1))
         t_x = self.head(t_x)

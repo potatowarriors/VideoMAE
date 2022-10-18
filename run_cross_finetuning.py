@@ -385,10 +385,7 @@ def main(args, ds_init):
 
         utils.load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
 
-    if not args.eval:
-        # add cross block, fc_norm, head initialize weights
-        change_verification_mode(model, args.nb_classes)
-        model.to(device).half()
+    model.to(device)
     model_ema = None
     if args.model_ema:
         model_ema = ModelEma(
