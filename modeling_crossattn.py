@@ -188,11 +188,11 @@ class Block(nn.Module):
         if self.gamma_1 is None:
             t_x = t_x + self.drop_path(self.attn(self.norm1(t_x)))
             t_x = t_x + self.drop_path(self.cross(s_x, self.norm2(t_x)))
-            t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x)))
+            t_x = t_x + self.drop_path(self.mlp(self.norm3(t_x)))
         else:
             t_x = t_x + self.drop_path(self.gamma_1 * self.attn(self.norm1(t_x)))
             t_x = t_x + self.drop_path(self.gamma_2 * self.cross(s_x, self.norm2(t_x)))
-            t_x = t_x + self.drop_path(self.gamma_3 * self.mlp(self.norm2(t_x)))
+            t_x = t_x + self.drop_path(self.gamma_3 * self.mlp(self.norm3(t_x)))
         return t_x
 
 
@@ -325,15 +325,6 @@ class CrossTransformer(nn.Module):
     
     def reset_fcnorm(self):
         self.fc_norm = nn.LayerNorm(self.embed_dim)
-        
-    # for extract clip feature
-    def extract_clip_feature(self, s_x):
-        clip_model, _ = clip.load('ViT-B/32', device='cuda')
-        # make 768 hiddendim vector
-        clip_model.visual.proj = None
-        with torch.no_grad():
-            s_x = clip_model.encode_image(s_x)
-        return s_x
 
     def forward_features(self,s_x ,t_x):
         t_x = self.patch_embed(t_x)
@@ -342,8 +333,6 @@ class CrossTransformer(nn.Module):
         if self.pos_embed is not None:
             t_x = t_x + self.pos_embed.expand(B, -1, -1).type_as(t_x).to(t_x.device).clone().detach()
         t_x = self.pos_drop(t_x)
-        
-        s_x = self.extract_clip_feature(s_x)
 
         for blk in self.blocks:
             t_x = blk(s_x, t_x)

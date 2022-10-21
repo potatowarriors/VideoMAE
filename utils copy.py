@@ -246,36 +246,34 @@ def is_main_process():
 def save_on_master(*args, **kwargs):
     if is_main_process():
         torch.save(*args, **kwargs)
+        
+def setup_for_distributed(is_master):
+    """
+    This function disables printing when not in master process
+    """
+    import builtins as __builtin__
+    builtin_print = __builtin__.print
+
+    def print(*args, **kwargs):
+        force = kwargs.pop('force', False)
+        if is_master or force:
+            builtin_print(*args, **kwargs)
+
+    __builtin__.print = print
 
 
 def init_distributed_mode(args):
-    if args.dist_on_itp:
-        args.rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
-        args.world_size = int(os.environ['OMPI_COMM_WORLD_SIZE'])
-        args.gpu = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
-        args.dist_url = "tcp://%s:%s" % (os.environ['MASTER_ADDR'], os.environ['MASTER_PORT'])
-        os.environ['LOCAL_RANK'] = str(args.gpu)
-        os.environ['RANK'] = str(args.rank)
-        os.environ['WORLD_SIZE'] = str(args.world_size)
-    # elif 'SLURM_PROCID' in os.environ:
-    #     if "WORLD_SIZE" in os.environ:
-    #         args.world_size = int(os.environ["WORLD_SIZE"])
-    #     ngpus_per_node = torch.cuda.device_count()
-    #     args.rank = int(os.environ['SLURM_PROCID'])
-    #     args.gpu = args.rank % torch.cuda.device_count()
-    #     args.world_size = int(os.environ['SLURM_NTASKS'])
-    #     # os.environ['RANK'] = str(args.rank)
-    #     # os.environ['LOCAL_RANK'] = str(args.gpu)
-    #     # os.environ['WORLD_SIZE'] = str(args.world_size)
-
-    #     node_list = os.environ['SLURM_NODELIST']
-    #     addr = subprocess.getoutput(
-    #         f'scontrol show hostname {node_list} | head -n1')
-    #     os.environ['MASTER_ADDR'] = addr
-    elif 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
         args.rank = int(os.environ["RANK"])
         args.world_size = int(os.environ['WORLD_SIZE'])
         args.gpu = int(os.environ['LOCAL_RANK'])
+    elif 'SLURM_PROCID' in os.environ:
+        args.rank = int(os.environ['SLURM_PROCID'])
+        args.gpu = args.rank % torch.cuda.device_count()
+        args.world_size = int(os.environ['SLURM_NTASKS'])
+        os.environ['RANK'] = str(args.rank)
+        os.environ['LOCAL_RANK'] = str(args.gpu)
+        os.environ['WORLD_SIZE'] = str(args.world_size)
     else:
         print('Not using distributed mode')
         args.distributed = False
@@ -285,12 +283,11 @@ def init_distributed_mode(args):
 
     torch.cuda.set_device(args.gpu)
     args.dist_backend = 'nccl'
-    print('| distributed init (rank {}): {}, gpu {}'.format(
-        args.rank, args.dist_url, args.gpu), flush=True)
+    print('| distributed init (rank {}): {}'.format(
+        args.rank, args.dist_url), flush=True)
     torch.distributed.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                          world_size=args.world_size, rank=args.rank)
     torch.distributed.barrier()
-    # assert torch.distributed.is_initialized()
     setup_for_distributed(args.rank == 0)
 
 
@@ -564,15 +561,15 @@ def cross_multiple_samples_collate(batch, fold=False):
     else:
         return s_inputs, t_inputs, labels, video_idx, extra_data
     
-def freeze_stlayers(model):
-    block_list = ['attn']
+def freze_headinitialize_crossattn(model, nb_classes):
+    block_list = ['fc_norm', 'head']
     for name, param in model.named_parameters():
         for block in block_list:
             if block in name:
                 param.requires_grad = False
                 break
             else:
-                param.requires_grad = True
+                param.requires_grad = False
     return model
                 
 def change_verification_mode(model, nb_classes):

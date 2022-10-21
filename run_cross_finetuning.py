@@ -19,12 +19,13 @@ from optim_factory import create_optimizer, get_parameter_groups, LayerDecayValu
 
 from datasets import build_dataset
 from engine_for_crossattn import train_one_epoch, validation_one_epoch, final_test, merge
-from utils import NativeScalerWithGradNormCount as NativeScaler, change_verification_mode, freze_headinitialize_crossattn
+from utils import NativeScalerWithGradNormCount as NativeScaler, change_verification_mode, freeze_stlayers
 from utils import  cross_multiple_samples_collate
 import utils
 import modeling_finetune
 #add new code
 import modeling_crossattn
+import clip
 
 
 def get_args():
@@ -386,6 +387,12 @@ def main(args, ds_init):
         utils.load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
 
     model.to(device)
+    # clip model setting
+    clip_model, _ = clip.load('ViT-B/16', device)
+    clip_model.visual.proj = None
+    # freeze space-time joint attention layers
+    freeze_stlayers(model)
+    
     model_ema = None
     if args.model_ema:
         model_ema = ModelEma(
@@ -498,7 +505,7 @@ def main(args, ds_init):
         if log_writer is not None:
             log_writer.set_step(epoch * num_training_steps_per_epoch * args.update_freq)
         train_stats = train_one_epoch(
-            model, criterion, data_loader_train, optimizer,
+            model, clip_model, criterion, data_loader_train, optimizer,
             device, epoch, loss_scaler, args.clip_grad, model_ema, mixup_fn,
             log_writer=log_writer, start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values,
@@ -510,7 +517,7 @@ def main(args, ds_init):
                     args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                     loss_scaler=loss_scaler, epoch=epoch, model_ema=model_ema)
         if data_loader_val is not None:
-            test_stats = validation_one_epoch(data_loader_val, model, device)
+            test_stats = validation_one_epoch(data_loader_val, model, clip_model, device)
             print(f"Accuracy of the network on the {len(dataset_val)} val videos: {test_stats['acc1']:.1f}%")
             if max_accuracy < test_stats["acc1"]:
                 max_accuracy = test_stats["acc1"]
@@ -540,7 +547,7 @@ def main(args, ds_init):
                 f.write(json.dumps(log_stats) + "\n")
 
     preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
-    test_stats = final_test(data_loader_test, model, device, preds_file)
+    test_stats = final_test(data_loader_test, model, clip_model, device, preds_file)
     torch.distributed.barrier()
     if global_rank == 0:
         print("Start merging results...")

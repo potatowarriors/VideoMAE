@@ -399,8 +399,8 @@ class CrossSSVideoClsDataset(Dataset):
                     index = np.random.randint(self.__len__())
                     sample = self.dataset_samples[index]
                     buffer = self.loadvideo_decord(sample)
-            center_frame = buffer[buffer.shape[0]//2, :, :, :]
             buffer = self.data_transform(buffer)
+            center_frame = buffer[:, buffer.shape[0]//2, :, :]
             return center_frame, buffer, self.label_array[index], sample.split("/")[-1].split(".")[0]
 
         elif self.mode == 'test':
@@ -434,8 +434,8 @@ class CrossSSVideoClsDataset(Dataset):
             else:
                 buffer = buffer[temporal_start::2, :, spatial_start:spatial_start + self.short_side_size, :]
             
-            center_frame = buffer[buffer.shape[0]//2, :, :, :]
             buffer = self.data_transform(buffer)
+            center_frame = buffer[:, buffer.shape[0]//2, :, :]
             return center_frame, buffer, self.test_label_array[index], sample.split("/")[-1].split(".")[0], \
                    chunk_nb, split_nb
         else:

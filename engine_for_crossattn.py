@@ -20,7 +20,7 @@ def get_loss_scale_for_deepspeed(model):
     return optimizer.loss_scale if hasattr(optimizer, "loss_scale") else optimizer.cur_scale
 
 
-def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
+def train_one_epoch(model: torch.nn.Module, clip_model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None, log_writer=None,
@@ -58,6 +58,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         if mixup_fn is not None:
             t_samples, targets = mixup_fn(t_samples, targets)
+            
+        with torch.no_grad():
+            s_samples = clip_model.encode_image(s_samples)
 
         if loss_scaler is None:
             s_samples, t_samples = s_samples.half(), t_samples.half()
@@ -141,7 +144,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
-def validation_one_epoch(data_loader, model, device):
+def validation_one_epoch(data_loader, model, clip_model, device):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -157,6 +160,8 @@ def validation_one_epoch(data_loader, model, device):
         s_features = s_features.to(device, non_blocking=True)
         t_features = t_features.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
+        with torch.no_grad():
+            s_features = clip_model.encode_image(s_features)
 
         # compute output
         with torch.cuda.amp.autocast():
@@ -179,7 +184,7 @@ def validation_one_epoch(data_loader, model, device):
 
 
 @torch.no_grad()
-def final_test(data_loader, model, device, file):
+def final_test(data_loader, model, clip_model, device, file):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -199,6 +204,9 @@ def final_test(data_loader, model, device, file):
         s_features = s_features.to(device, non_blocking=True)
         t_features = t_features.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
+        
+        with torch.no_grad():
+            s_features = clip_model.encode_image(s_features)
 
         # compute output
         with torch.cuda.amp.autocast():
