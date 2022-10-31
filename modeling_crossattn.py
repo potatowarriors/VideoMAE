@@ -127,7 +127,6 @@ class CrossAttention(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
 
     def forward(self, s_x, t_x):
-        s_x = s_x.unsqueeze(1)
         B, s_N, C = s_x.shape
         _, t_N, C = t_x.shape
         cross_q_bias = None

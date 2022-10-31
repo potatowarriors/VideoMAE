@@ -8,6 +8,7 @@ from mixup import Mixup
 from timm.utils import accuracy, ModelEma
 import utils
 from scipy.special import softmax
+from einops import rearrange
 
 def cross_train_class_batch(model, s_samples, t_samples, target, criterion):
     outputs = model(s_samples, t_samples)
@@ -55,12 +56,16 @@ def train_one_epoch(model: torch.nn.Module, clip_model: torch.nn.Module, criteri
         s_samples = s_samples.to(device, non_blocking=True)
         t_samples = t_samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
+        batch = s_samples.shape[0]
 
+        # Mixup을 쓰는게 안좋은거같다 CLIP을 쓰는데 왜 여적 Mixup을 당연히 쓰고 있었지....?
         if mixup_fn is not None:
             t_samples, targets = mixup_fn(t_samples, targets)
-            
+        
+        s_samples = rearrange(s_samples, 'b c t h w -> (b t) c h w')
         with torch.no_grad():
             s_samples = clip_model.encode_image(s_samples)
+        s_samples = rearrange(s_samples, '(b t) hidden_dim -> b t hidden_dim', b=batch)
 
         if loss_scaler is None:
             s_samples, t_samples = s_samples.half(), t_samples.half()
