@@ -391,7 +391,8 @@ def main(args, ds_init):
     clip_model, _ = clip.load('ViT-B/16', device)
     clip_model.visual.proj = None
     # freeze space-time joint attention layers
-    freeze_stlayers(model)
+    # freeze_stlayers(model) # freeze상태로 코드 돌려 버림
+    
     
     model_ema = None
     if args.model_ema:

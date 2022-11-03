@@ -165,8 +165,12 @@ def validation_one_epoch(data_loader, model, clip_model, device):
         s_features = s_features.to(device, non_blocking=True)
         t_features = t_features.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
+        batch = s_features.shape[0]
+        
+        s_features = rearrange(s_features, 'b c t h w -> (b t) c h w')
         with torch.no_grad():
             s_features = clip_model.encode_image(s_features)
+        s_features = rearrange(s_features, '(b t) hidden_dim -> b t hidden_dim', b=batch)
 
         # compute output
         with torch.cuda.amp.autocast():
@@ -209,9 +213,12 @@ def final_test(data_loader, model, clip_model, device, file):
         s_features = s_features.to(device, non_blocking=True)
         t_features = t_features.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
+        batch = s_features.shape[0]
         
+        s_features = rearrange(s_features, 'b c t h w -> (b t) c h w')
         with torch.no_grad():
             s_features = clip_model.encode_image(s_features)
+        s_features = rearrange(s_features, '(b t) hidden_dim -> b t hidden_dim', b=batch)
 
         # compute output
         with torch.cuda.amp.autocast():
