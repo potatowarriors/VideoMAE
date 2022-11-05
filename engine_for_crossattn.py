@@ -40,7 +40,7 @@ def train_one_epoch(model: torch.nn.Module, clip_model: torch.nn.Module, criteri
     else:
         optimizer.zero_grad()
 
-    for data_iter_step, (s_samples, t_samples, targets, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for data_iter_step, (samples, targets, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         step = data_iter_step // update_freq
         if step >= num_training_steps_per_epoch:
             continue
@@ -53,28 +53,27 @@ def train_one_epoch(model: torch.nn.Module, clip_model: torch.nn.Module, criteri
                 if wd_schedule_values is not None and param_group["weight_decay"] > 0:
                     param_group["weight_decay"] = wd_schedule_values[it]
 
-        s_samples = s_samples.to(device, non_blocking=True)
-        t_samples = t_samples.to(device, non_blocking=True)
+        samples = samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
-        batch = s_samples.shape[0]
+        batch = samples.shape[0]
 
-        # Mixup을 쓰는게 안좋은거같다 CLIP을 쓰는데 왜 여적 Mixup을 당연히 쓰고 있었지....?
         if mixup_fn is not None:
-            t_samples, targets = mixup_fn(t_samples, targets)
+            samples, targets = mixup_fn(samples, targets)
         
-        s_samples = rearrange(s_samples, 'b c t h w -> (b t) c h w')
+        s_samples = rearrange(samples, 'b c t h w -> (b t) c h w').to(device, non_blocking=True)
         with torch.no_grad():
             s_samples = clip_model.encode_image(s_samples)
         s_samples = rearrange(s_samples, '(b t) hidden_dim -> b t hidden_dim', b=batch)
+        s_samples = s_samples[:, 8, :].unsqueeze(dim=1) # using center frame
 
         if loss_scaler is None:
-            s_samples, t_samples = s_samples.half(), t_samples.half()
+            s_samples, samples = s_samples.half(), samples.half()
             loss, output = cross_train_class_batch(
-                model, s_samples, t_samples, targets, criterion)
+                model, s_samples, samples, targets, criterion)
         else:
             with torch.cuda.amp.autocast():
                 loss, output = cross_train_class_batch(
-                    model, s_samples, t_samples, targets, criterion)
+                    model, s_samples, samples, targets, criterion)
         loss_value = loss.item()
         #make_dot(loss, params=dict(model.named_parameters())).render(f'graph_ver2', format='png')        
 
@@ -159,27 +158,25 @@ def validation_one_epoch(data_loader, model, clip_model, device):
     model.eval()
 
     for batch in metric_logger.log_every(data_loader, 10, header):
-        s_features = batch[0]
-        t_features = batch[1]
-        target = batch[2]
-        s_features = s_features.to(device, non_blocking=True)
-        t_features = t_features.to(device, non_blocking=True)
+        samples = batch[0]
+        target = batch[1]
+        batch_size = samples.shape[0]
+        samples = samples.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
-        batch = s_features.shape[0]
         
-        s_features = rearrange(s_features, 'b c t h w -> (b t) c h w')
+        s_samples = rearrange(samples, 'b c t h w -> (b t) c h w').to(device, non_blocking=True)
         with torch.no_grad():
-            s_features = clip_model.encode_image(s_features)
-        s_features = rearrange(s_features, '(b t) hidden_dim -> b t hidden_dim', b=batch)
+            s_samples = clip_model.encode_image(s_samples)
+        s_samples = rearrange(s_samples, '(b t) hidden_dim -> b t hidden_dim', b=batch_size)
+        s_samples = s_samples[:, 8, :].unsqueeze(dim=1) # using center frame
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(s_features, t_features)
+            output = model(s_samples, samples)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
 
-        batch_size = t_features.shape[0]
         metric_logger.update(loss=loss.item())
         metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
         metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
@@ -204,25 +201,24 @@ def final_test(data_loader, model, clip_model, device, file):
     final_result = []
     
     for batch in metric_logger.log_every(data_loader, 10, header):
-        s_features = batch[0]
-        t_features = batch[1]
-        target = batch[2]
-        ids = batch[3]
-        chunk_nb = batch[4]
-        split_nb = batch[5]
-        s_features = s_features.to(device, non_blocking=True)
-        t_features = t_features.to(device, non_blocking=True)
+        samples = batch[0]
+        target = batch[1]
+        ids = batch[2]
+        chunk_nb = batch[3]
+        split_nb = batch[4]
+        batch_size = samples.shape[0]
+        samples = samples.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
-        batch = s_features.shape[0]
         
-        s_features = rearrange(s_features, 'b c t h w -> (b t) c h w')
+        s_samples = rearrange(samples, 'b c t h w -> (b t) c h w').to(device, non_blocking=True)
         with torch.no_grad():
-            s_features = clip_model.encode_image(s_features)
-        s_features = rearrange(s_features, '(b t) hidden_dim -> b t hidden_dim', b=batch)
+            s_samples = clip_model.encode_image(s_samples)
+        s_samples = rearrange(s_samples, '(b t) hidden_dim -> b t hidden_dim', b=batch_size)
+        s_samples = s_samples[:, 8, :].unsqueeze(dim=1) # using center frame
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(s_features, t_features)
+            output = model(s_samples, samples)
             loss = criterion(output, target)
 
         for i in range(output.size(0)):
@@ -235,7 +231,6 @@ def final_test(data_loader, model, clip_model, device, file):
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
 
-        batch_size = t_features.shape[0]
         metric_logger.update(loss=loss.item())
         metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
         metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)

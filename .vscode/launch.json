@@ -20,9 +20,9 @@
                     "--data_set", "MINI_SSV2",
                     "--nb_classes", "87",
                     "--data_path", "/data/kide004/repos/VideoMAE/dataset/mini-ssv2",
-                    "--finetune", "/data/kide004/repos/VideoMAE/train_sh/cross_attn_onlineclip/clip_b32_pretrain_unfreeze/lr1.25-e3_b16_warmup15/output/checkpoint-149/mp_rank_00_model_states.pt",
-                    "--log_dir", "/data/kide004/repos/VideoMAE/train_sh/cross_attn_onlineclip/clip_b32_pretrain_unfreeze/lr1.25-e3_b16_warmup15/output",
-                    "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/cross_attn_onlineclip/clip_b32_pretrain_unfreeze/lr1.25-e3_b16_warmup15/output",
+                    "--finetune", "/data/kide004/repos/VideoMAE/pre-trained/ssv2_pretrained.pth",
+                    "--log_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
+                    "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
                     "--batch_size", "12",
                     "--num_sample", "1",
                     "--epochs", "10",
@@ -41,7 +41,7 @@
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
                     "--dist_eval",
-                    "--eval"
+                    "--freeze_vmae"
                ]
           }
      ]

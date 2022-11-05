@@ -189,6 +189,7 @@ def get_args():
                         help='url used to set up distributed training')
 
     parser.add_argument('--enable_deepspeed', action='store_true', default=False)
+    parser.add_argument('--freeze_vmae', action='store_true', default=False)
 
     known_args, _ = parser.parse_known_args()
 
@@ -387,11 +388,13 @@ def main(args, ds_init):
         utils.load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
 
     model.to(device)
+    
     # clip model setting
     clip_model, _ = clip.load('ViT-B/16', device)
     clip_model.visual.proj = None
     # freeze space-time joint attention layers
-    # freeze_stlayers(model) # freeze상태로 코드 돌려 버림
+    if args.freeze_vmae:
+        freeze_stlayers(model)
     
     
     model_ema = None

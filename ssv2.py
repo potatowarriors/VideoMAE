@@ -388,7 +388,7 @@ class CrossSSVideoClsDataset(Dataset):
             # augmented center frame pick for extract CLIP eoncded featrue
             # center_frame = buffer[:, buffer.shape[1]//2, :, :]
             
-            return buffer, buffer, self.label_array[index], index, {}
+            return buffer, self.label_array[index], index, {}
         
         elif self.mode == 'validation':
             sample = self.dataset_samples[index]
@@ -401,7 +401,7 @@ class CrossSSVideoClsDataset(Dataset):
                     buffer = self.loadvideo_decord(sample)
             buffer = self.data_transform(buffer)
             #center_frame = buffer[:, buffer.shape[0]//2, :, :]
-            return buffer, buffer, self.label_array[index], sample.split("/")[-1].split(".")[0]
+            return buffer, self.label_array[index], sample.split("/")[-1].split(".")[0]
 
         elif self.mode == 'test':
             sample = self.test_dataset[index]
@@ -436,7 +436,7 @@ class CrossSSVideoClsDataset(Dataset):
             
             buffer = self.data_transform(buffer)
             #center_frame = buffer[:, buffer.shape[0]//2, :, :]
-            return buffer, buffer, self.test_label_array[index], sample.split("/")[-1].split(".")[0], \
+            return buffer, self.test_label_array[index], sample.split("/")[-1].split(".")[0], \
                    chunk_nb, split_nb
         else:
             raise NameError('mode {} unkown'.format(self.mode))
