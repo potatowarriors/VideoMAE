@@ -10,8 +10,8 @@ import utils
 from scipy.special import softmax
 from einops import rearrange
 
-def cross_train_class_batch(model, s_samples, t_samples, target, criterion):
-    outputs = model(s_samples, t_samples)
+def cross_train_class_batch(model, samples, target, criterion):
+    outputs = model(samples)
     loss = criterion(outputs, target)
     return loss, outputs
 
@@ -21,7 +21,7 @@ def get_loss_scale_for_deepspeed(model):
     return optimizer.loss_scale if hasattr(optimizer, "loss_scale") else optimizer.cur_scale
 
 
-def train_one_epoch(model: torch.nn.Module, clip_model: torch.nn.Module, criterion: torch.nn.Module,
+def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None, log_writer=None,
@@ -59,21 +59,15 @@ def train_one_epoch(model: torch.nn.Module, clip_model: torch.nn.Module, criteri
 
         if mixup_fn is not None:
             samples, targets = mixup_fn(samples, targets)
-        
-        s_samples = rearrange(samples, 'b c t h w -> (b t) c h w').to(device, non_blocking=True)
-        with torch.no_grad():
-            s_samples = clip_model.encode_image(s_samples)
-        s_samples = rearrange(s_samples, '(b t) hidden_dim -> b t hidden_dim', b=batch)
-        s_samples = s_samples[:, 8, :].unsqueeze(dim=1) # using center frame
 
         if loss_scaler is None:
-            s_samples, samples = s_samples.half(), samples.half()
+            samples = samples.half()
             loss, output = cross_train_class_batch(
-                model, s_samples, samples, targets, criterion)
+                model, samples, targets, criterion)
         else:
             with torch.cuda.amp.autocast():
                 loss, output = cross_train_class_batch(
-                    model, s_samples, samples, targets, criterion)
+                    model, samples, targets, criterion)
         loss_value = loss.item()
         #make_dot(loss, params=dict(model.named_parameters())).render(f'graph_ver2', format='png')        
 
@@ -148,7 +142,7 @@ def train_one_epoch(model: torch.nn.Module, clip_model: torch.nn.Module, criteri
 
 
 @torch.no_grad()
-def validation_one_epoch(data_loader, model, clip_model, device):
+def validation_one_epoch(data_loader, model, device):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -163,16 +157,10 @@ def validation_one_epoch(data_loader, model, clip_model, device):
         batch_size = samples.shape[0]
         samples = samples.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
-        
-        s_samples = rearrange(samples, 'b c t h w -> (b t) c h w').to(device, non_blocking=True)
-        with torch.no_grad():
-            s_samples = clip_model.encode_image(s_samples)
-        s_samples = rearrange(s_samples, '(b t) hidden_dim -> b t hidden_dim', b=batch_size)
-        s_samples = s_samples[:, 8, :].unsqueeze(dim=1) # using center frame
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(s_samples, samples)
+            output = model(samples)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -190,7 +178,7 @@ def validation_one_epoch(data_loader, model, clip_model, device):
 
 
 @torch.no_grad()
-def final_test(data_loader, model, clip_model, device, file):
+def final_test(data_loader, model, device, file):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -209,16 +197,10 @@ def final_test(data_loader, model, clip_model, device, file):
         batch_size = samples.shape[0]
         samples = samples.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
-        
-        s_samples = rearrange(samples, 'b c t h w -> (b t) c h w').to(device, non_blocking=True)
-        with torch.no_grad():
-            s_samples = clip_model.encode_image(s_samples)
-        s_samples = rearrange(s_samples, '(b t) hidden_dim -> b t hidden_dim', b=batch_size)
-        s_samples = s_samples[:, 8, :].unsqueeze(dim=1) # using center frame
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(s_samples, samples)
+            output = model(samples)
             loss = criterion(output, target)
 
         for i in range(output.size(0)):

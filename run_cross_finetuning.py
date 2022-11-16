@@ -25,7 +25,6 @@ import utils
 import modeling_finetune
 #add new code
 import modeling_crossattn
-import clip
 
 
 def get_args():
@@ -34,8 +33,6 @@ def get_args():
     parser.add_argument('--epochs', default=30, type=int)
     parser.add_argument('--update_freq', default=1, type=int)
     parser.add_argument('--save_ckpt_freq', default=100, type=int)
-    # add my code.
-    parser.add_argument('--cross_attn', action='store_true', default=False)
 
     # Model parameters
     parser.add_argument('--model', default='cross_vit_base_patch16_224', type=str, metavar='MODEL',
@@ -131,6 +128,7 @@ def get_args():
 
     # Finetuning params
     parser.add_argument('--finetune', default='', help='finetune from checkpoint')
+    parser.add_argument('--clip_finetune',default='', help='finetune from clip checkpoint')
     parser.add_argument('--model_key', default='model|module', type=str)
     parser.add_argument('--model_prefix', default='', type=str)
     parser.add_argument('--init_scale', default=0.001, type=float)
@@ -189,7 +187,7 @@ def get_args():
                         help='url used to set up distributed training')
 
     parser.add_argument('--enable_deepspeed', action='store_true', default=False)
-    parser.add_argument('--freeze_vmae', action='store_true', default=False)
+    parser.add_argument('--freeze_layers', action='store_true', default=False)
 
     known_args, _ = parser.parse_known_args()
 
@@ -276,7 +274,7 @@ def main(args, ds_init):
     if dataset_val is not None:
         data_loader_val = torch.utils.data.DataLoader(
             dataset_val, sampler=sampler_val,
-            batch_size=int(1.5 * args.batch_size),
+            batch_size=args.batch_size,
             num_workers=args.num_workers,
             pin_memory=args.pin_mem,
             drop_last=False
@@ -322,6 +320,7 @@ def main(args, ds_init):
     print("Patch size = %s" % str(patch_size))
     args.window_size = 16
     args.patch_size = patch_size
+    
 
     if args.finetune:
         if args.finetune.startswith('https'):
@@ -332,6 +331,8 @@ def main(args, ds_init):
 
         print("Load ckpt from %s" % args.finetune)
         checkpoint_model = None
+        clip_checkpoint = torch.jit.load('/data/kide004/repos/VideoMAE/pre-trained/ViT-B-16.pt', map_location='cpu')
+        checkpoint_clip = clip_checkpoint.visual.state_dict()
         for model_key in args.model_key.split('|'):
             if model_key in checkpoint:
                 checkpoint_model = checkpoint[model_key]
@@ -346,6 +347,7 @@ def main(args, ds_init):
                 del checkpoint_model[k]
 
         all_keys = list(checkpoint_model.keys())
+        clip_all_keys = list(checkpoint_clip.keys())
         new_dict = OrderedDict()
         for key in all_keys:
             if key.startswith('backbone.'):
@@ -354,6 +356,17 @@ def main(args, ds_init):
                 new_dict[key[8:]] = checkpoint_model[key]
             else:
                 new_dict[key] = checkpoint_model[key]
+                
+        # add new code for load clip weight
+        for key in clip_all_keys:
+            if key.startswith('transformer.'):
+                if key[23] == '.':
+                    new_dict['blocks.'+ key[22] + '.clip_' + key[24:]] = checkpoint_clip[key]
+                else : # layer10 ~ 11 process
+                    new_dict['blocks.'+ key[22:24] + '.clip_' + key[25:]] = checkpoint_clip[key]
+            else:
+                new_dict['clip_' + key] = checkpoint_clip[key]
+                
         # load로 불러온 pre-trained weight를 new_dict에 담아주고
         checkpoint_model = new_dict
 
@@ -389,11 +402,8 @@ def main(args, ds_init):
 
     model.to(device)
     
-    # clip model setting
-    clip_model, _ = clip.load('ViT-B/16', device)
-    clip_model.visual.proj = None
     # freeze space-time joint attention layers
-    if args.freeze_vmae:
+    if args.freeze_layers:
         freeze_stlayers(model)
     
     
@@ -509,7 +519,7 @@ def main(args, ds_init):
         if log_writer is not None:
             log_writer.set_step(epoch * num_training_steps_per_epoch * args.update_freq)
         train_stats = train_one_epoch(
-            model, clip_model, criterion, data_loader_train, optimizer,
+            model, criterion, data_loader_train, optimizer,
             device, epoch, loss_scaler, args.clip_grad, model_ema, mixup_fn,
             log_writer=log_writer, start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values,
@@ -521,7 +531,7 @@ def main(args, ds_init):
                     args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                     loss_scaler=loss_scaler, epoch=epoch, model_ema=model_ema)
         if data_loader_val is not None:
-            test_stats = validation_one_epoch(data_loader_val, model, clip_model, device)
+            test_stats = validation_one_epoch(data_loader_val, model, device)
             print(f"Accuracy of the network on the {len(dataset_val)} val videos: {test_stats['acc1']:.1f}%")
             if max_accuracy < test_stats["acc1"]:
                 max_accuracy = test_stats["acc1"]
@@ -551,7 +561,7 @@ def main(args, ds_init):
                 f.write(json.dumps(log_stats) + "\n")
 
     preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
-    test_stats = final_test(data_loader_test, model, clip_model, device, preds_file)
+    test_stats = final_test(data_loader_test, model, device, preds_file)
     torch.distributed.barrier()
     if global_rank == 0:
         print("Start merging results...")
