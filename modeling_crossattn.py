@@ -171,7 +171,7 @@ class CrossAttentionS2T(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
 
     def forward(self, s_x, t_x):
-        B, t, s_N, C = s_x.shape
+        B, s_N, C = s_x.shape
         _, t_N, C = t_x.shape
         s2t_q_bias = None
         s2t_kv_bias = None
@@ -185,7 +185,7 @@ class CrossAttentionS2T(nn.Module):
         s2t_q = s2t_q.reshape(B, t_N, self.num_heads, -1).permute(0, 2, 1, 3)
         # s2t_kv = spatial input
         s2t_kv = F.linear(input=s_x, weight=self.s2t_kv.weight, bias=s2t_kv_bias)
-        s2t_kv = s2t_kv.reshape(B, t, 2, self.num_heads, -1).permute(2, 0, 3, 1, 4)
+        s2t_kv = s2t_kv.reshape(B, s_N, 2, self.num_heads, -1).permute(2, 0, 3, 1, 4)
         s2t_q, s2t_k, s2t_v = s2t_q, s2t_kv[0], s2t_kv[1]   # make torchscript happy (cannot use tensor as tuple)
 
         s2t_q = s2t_q * self.scale
@@ -298,20 +298,20 @@ class Block(nn.Module):
 
     def forward(self,s_x, t_x):
         if self.gamma_1 is None:
-            s_x = s_x + self.drop_path(self.clip_attention(self.clip_ln_1(s_x))) # CLIP space attention
+            s_x = s_x + (self.clip_attention(self.clip_ln_1(s_x))) # CLIP space attention
             s_x = self.ln_t2s(s_x) #ln before pass to cross attn layer
             t_x = t_x + self.drop_path(self.attn(self.norm1(t_x))) # VMAE space-time joint attention
             t_x = self.ln_s2t(t_x) #ln before pass to cross attn layer
             
-            s_x = rearrange(s_x, '(b t) n d -> b t n d', t=16) # cross attention을 위해 shape을 수정해준다.
-            cls, patches = torch.split(s_x,[1, 196], dim=2)
+            #s_x = rearrange(s_x, '(b t) n d -> b t n d', t=16) # cross attention을 위해 shape을 수정해준다. center frame만 쓰니까 잠시 꺼둔다.
+            cls, patches = torch.split(s_x,[1, 196], dim=1)
             
             # cross attn 순서에 대한 ablation study를 해야 할까....?
-            cls = cls + self.drop_path(self.t2s_cross(cls, t_x).unsqueeze(2)) # Cross attention time to space
+            #cls = cls + self.drop_path(self.t2s_cross(cls, t_x).unsqueeze(2)) # Cross attention time to space. 이건 잠시 검증을 위해 꺼둔다.
             t_x = t_x + self.drop_path(self.s2t_cross(cls, t_x)) # Cross attention space to time
             
-            s_x = torch.cat([cls, patches], dim=2)   
-            s_x = rearrange(s_x, 'b t n d -> (b t) n d', t=16)
+            s_x = torch.cat([cls, patches], dim=1)   
+            #s_x = rearrange(s_x, 'b t n d -> (b t) n d', t=16) center frame만 쓰니까 잠시 꺼둔다.
             
             s_x = s_x + self.drop_path(self.clip_mlp(self.clip_ln_2(s_x))) # pass CLIP FFN
             t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x))) # pass VMAE FFN
@@ -390,6 +390,8 @@ class STCrossTransformer(nn.Module):
 
         trunc_normal_(self.head.weight, std=.02)
         self.apply(self._init_weights)
+        
+        self.initialize_parameters(embed_dim, depth)
 
         self.head.weight.data.mul_(init_scale)
         self.head.bias.data.mul_(init_scale)
@@ -402,6 +404,20 @@ class STCrossTransformer(nn.Module):
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
+            
+    def initialize_parameters(self, embed_dim, depth):
+        proj_std = (embed_dim ** -0.5) * ((2 * depth) ** -0.5)
+        attn_std = embed_dim ** -0.5
+        fc_std = (2 * embed_dim) ** -0.5
+        for block in self.blocks:
+            
+            nn.init.normal_(block.s2t_cross.s2t_q.weight, std=attn_std)
+            nn.init.normal_(block.s2t_cross.s2t_kv.weight, std=attn_std)
+            nn.init.normal_(block.s2t_cross.proj.weight, std=proj_std)
+            
+            nn.init.normal_(block.t2s_cross.t2s_q.weight, std=attn_std)
+            nn.init.normal_(block.t2s_cross.t2s_kv.weight, std=attn_std)
+            nn.init.normal_(block.t2s_cross.t2s_proj.weight, std=proj_std)
 
     def get_num_layers(self):
         return len(self.blocks)
@@ -422,7 +438,8 @@ class STCrossTransformer(nn.Module):
 
     def forward_features(self, x):
         t_x = x
-        s_x = rearrange(x, 'b c t h w -> (b t) c h w')
+        s_x = x[:, :, x.shape[2]//2, :, :] #center frame pick
+        #s_x = rearrange(x, 'b c t h w -> (b t) c h w') 이건 잠시 module검증을 위해 center만 사용하자.
         s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
         s_x = s_x.reshape(s_x.shape[0], s_x.shape[1], -1) # [*, embeddim, grid**2]
         s_x = s_x.permute(0, 2, 1) # shape[batch, patchnum, embeddim]
@@ -438,17 +455,17 @@ class STCrossTransformer(nn.Module):
         t_x = self.pos_drop(t_x)
 
         for blk in self.blocks:
-            s_x, t_x = blk(s_x, t_x)
+            _, t_x = blk(s_x, t_x)
             
-        s_x = rearrange(s_x, '(b t) patch dim -> b t patch dim', t=16)
-        s_x = s_x[:, :, 0, :] #cls token pick
-        s_x = s_x.mean(1) #average pooling all frame
-        s_x = self.clip_ln_post(s_x)
+        # s_x = rearrange(s_x, '(b t) patch dim -> b t patch dim', t=16)
+        # s_x = s_x[:, :, 0, :] #cls token pick
+        # s_x = s_x.mean(1) #average pooling all frame
+        # s_x = self.clip_ln_post(s_x)
         t_x = self.vmae_fc_norm(t_x.mean(1)) # VideoMAE 최종적으로 normalize해주네.
         
-        x = (s_x + t_x) / 2 # CLIP output과 VMAE output을 average해준다.
+        # x = (s_x + t_x) / 2 # CLIP output과 VMAE output을 average해준다.
         
-        return x
+        return t_x
 
 
     def forward(self, x):

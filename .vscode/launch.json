@@ -8,11 +8,11 @@
                "name": "Python: Current File",
                "type": "python",
                "request": "launch",
-               "module": "torch.distributed.launch",
                "console": "integratedTerminal",
+               "program": "${file}",
                "justMyCode": true,
                "args" : [
-                    "--nproc_per_node", "4",
+                    "--nproc_per_node", "1",
                     "--master_port", "12330",
                     "/data/kide004/repos/VideoMAE/run_cross_finetuning.py",
                     "--model", "cross_vit_base_patch16_224",
@@ -22,7 +22,7 @@
                     "--finetune", "/data/kide004/repos/VideoMAE/pre-trained/ssv2_pretrained.pth",
                     "--log_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
                     "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
-                    "--batch_size", "8",
+                    "--batch_size", "12",
                     "--num_sample", "1",
                     "--epochs", "10",
                     "--save_ckpt_freq", "1",
@@ -38,7 +38,7 @@
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
                     "--dist_eval",
-                    "--freeze_layers"
+                    "--freeze_layers",
                ]
           }
      ]
