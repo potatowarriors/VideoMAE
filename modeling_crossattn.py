@@ -87,6 +87,7 @@ class Attention(nn.Module):
         q, k, v = qkv[0], qkv[1], qkv[2]   # make torchscript happy (cannot use tensor as tuple)
 
         q = q * self.scale
+
         attn = (q @ k.transpose(-2, -1))
 
         
@@ -166,13 +167,13 @@ class Block(nn.Module):
         self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
-        self.norm2 = norm_layer(dim)
+        self.cross_norm = norm_layer(dim)
         self.cross = CrossAttention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.norm3 = norm_layer(dim)
+        self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
@@ -186,8 +187,8 @@ class Block(nn.Module):
     def forward(self,s_x, t_x):
         if self.gamma_1 is None:
             t_x = t_x + self.drop_path(self.attn(self.norm1(t_x)))
-            t_x = t_x + self.drop_path(self.cross(s_x, self.norm2(t_x)))
-            t_x = t_x + self.drop_path(self.mlp(self.norm3(t_x)))
+            t_x = t_x + self.drop_path(self.cross(s_x, self.cross_norm(t_x)))
+            t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x)))
         else:
             t_x = t_x + self.drop_path(self.gamma_1 * self.attn(self.norm1(t_x)))
             t_x = t_x + self.drop_path(self.gamma_2 * self.cross(s_x, self.norm2(t_x)))
