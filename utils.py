@@ -565,7 +565,6 @@ def cross_multiple_samples_collate(batch, fold=False):
         return s_inputs, t_inputs, labels, video_idx, extra_data
     
 def set_unfreeze_block(model,block_list):
-    print(block_list)
     for name, param in model.named_parameters():
         for block in block_list:#if block in block_list
             if block in name:
