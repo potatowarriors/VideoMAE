@@ -564,10 +564,10 @@ def cross_multiple_samples_collate(batch, fold=False):
     else:
         return s_inputs, t_inputs, labels, video_idx, extra_data
     
-def freeze_stlayers(model):
-    block_list = ['cross', 'head', 'fc_norm']
+def set_unfreeze_block(model,block_list):
+    print(block_list)
     for name, param in model.named_parameters():
-        for block in block_list:
+        for block in block_list:#if block in block_list
             if block in name:
                 param.requires_grad = True
                 break
