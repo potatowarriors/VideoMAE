@@ -192,9 +192,9 @@ class Block(nn.Module):
     def forward(self,s_x, t_x):
         if self.gamma_1 is None:
             t_x = t_x + self.drop_path(self.attn(self.norm1(t_x)))
-            t_x = t_x + self.drop_path(self.linear_up(self.linear_down(self.linear_norm(t_x))))
             t_x = t_x + self.drop_path(self.cross(s_x, self.cross_norm(t_x)))
             t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x)))
+            t_x = t_x + self.drop_path(self.linear_up(self.linear_down(self.linear_norm(t_x))))
         else:
             t_x = t_x + self.drop_path(self.gamma_1 * self.attn(self.norm1(t_x)))
             t_x = t_x + self.drop_path(self.gamma_2 * self.cross(s_x, self.norm2(t_x)))
