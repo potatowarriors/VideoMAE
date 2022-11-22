@@ -19,7 +19,7 @@ from optim_factory import create_optimizer, get_parameter_groups, LayerDecayValu
 
 from datasets import build_dataset
 from engine_for_crossattn import train_one_epoch, validation_one_epoch, final_test, merge
-from utils import NativeScalerWithGradNormCount as NativeScaler, change_verification_mode, freeze_stlayers
+from utils import NativeScalerWithGradNormCount as NativeScaler, change_verification_mode, set_unfreeze_block
 from utils import  cross_multiple_samples_collate
 import utils
 import modeling_finetune
@@ -189,7 +189,8 @@ def get_args():
                         help='url used to set up distributed training')
 
     parser.add_argument('--enable_deepspeed', action='store_true', default=False)
-    parser.add_argument('--freeze_vmae', action='store_true', default=False)
+    parser.add_argument('--non_freeze_block_names',nargs='+', type=str, default=None,
+                        help='patch_embed, norm, attn, cross_norm, cross, mlp, fc_norm, head')
 
     known_args, _ = parser.parse_known_args()
 
@@ -393,8 +394,8 @@ def main(args, ds_init):
     clip_model, _ = clip.load('ViT-B/16', device)
     clip_model.visual.proj = None
     # freeze space-time joint attention layers
-    if args.freeze_vmae:
-        freeze_stlayers(model)
+    if args.non_freeze_block_names:
+        set_unfreeze_block(model, args.non_freeze_block_names)
     
     
     model_ema = None
