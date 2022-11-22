@@ -189,6 +189,7 @@ def get_args():
                         help='url used to set up distributed training')
 
     parser.add_argument('--enable_deepspeed', action='store_true', default=False)
+    #for pick freeze layers
     parser.add_argument('--non_freeze_block_names',nargs='+', type=str, default=None,
                         help='patch_embed, norm, attn, cross_norm, cross, mlp, fc_norm, head')
 
