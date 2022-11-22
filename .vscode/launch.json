@@ -12,7 +12,7 @@
                "console": "integratedTerminal",
                "justMyCode": true,
                "args" : [
-                    "--nproc_per_node", "1",
+                    "--nproc_per_node", "4",
                     "--master_port", "13320",
                     "/data/kide004/repos/VideoMAE/run_cross_finetuning.py",
                     "--cross_attn",
