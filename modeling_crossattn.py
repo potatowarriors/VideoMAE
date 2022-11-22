@@ -167,6 +167,11 @@ class Block(nn.Module):
         self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
+        
+        self.linear_norm = norm_layer(dim)
+        self.linear_down = nn.Linear(dim, dim // 2, bias=True)
+        self.linear_up = nn.Linear(dim//2, dim, bias=True)
+        
         self.cross_norm = norm_layer(dim)
         self.cross = CrossAttention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
@@ -187,6 +192,7 @@ class Block(nn.Module):
     def forward(self,s_x, t_x):
         if self.gamma_1 is None:
             t_x = t_x + self.drop_path(self.attn(self.norm1(t_x)))
+            t_x = t_x + self.drop_path(self.linear_up(self.linear_down(self.linear_norm(t_x))))
             t_x = t_x + self.drop_path(self.cross(s_x, self.cross_norm(t_x)))
             t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x)))
         else:
@@ -242,8 +248,8 @@ class CrossTransformer(nn.Module):
     """ Vision Transformer with support for patch or hybrid CNN input stage
     """
     def __init__(self, 
-                 img_size=224, 
-                 patch_size=16, 
+                 img_size=224,
+                 patch_size=16,
                  in_chans=3, 
                  num_classes=1000, 
                  embed_dim=768, 
@@ -263,6 +269,7 @@ class CrossTransformer(nn.Module):
                  tubelet_size=2,
                  use_mean_pooling=True,
                  pretrained_cfg = None):
+        
         super().__init__()
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
@@ -352,13 +359,8 @@ class CrossTransformer(nn.Module):
         t_x = self.head(t_x)
         return t_x
 
-@register_model
-def cross_vit_small_patch16_224(pretrained=False, **kwargs):
-    model = CrossTransformer(
-        patch_size=16, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
-    return model
+
+
 
 @register_model
 def cross_vit_base_patch16_224(pretrained=False, **kwargs):
@@ -369,37 +371,3 @@ def cross_vit_base_patch16_224(pretrained=False, **kwargs):
     return model
 
 
-@register_model
-def cross_vit_base_patch16_384(pretrained=False, **kwargs):
-    model = CrossTransformer(
-        img_size=384, patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
-    return model
-
-
-@register_model
-def cross_vit_large_patch16_224(pretrained=False, **kwargs):
-    model = CrossTransformer(
-        patch_size=16, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
-    return model
-
-
-@register_model
-def cross_vit_large_patch16_384(pretrained=False, **kwargs):
-    model = CrossTransformer(
-        img_size=384, patch_size=16, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
-    return model
-
-
-@register_model
-def cross_vit_large_patch16_512(pretrained=False, **kwargs):
-    model = CrossTransformer(
-        img_size=512, patch_size=16, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
-    return model
