@@ -12,11 +12,11 @@
                "console": "integratedTerminal",
                "justMyCode": true,
                "args" : [
-                    "--nproc_per_node", "4",
+                    "--nproc_per_node", "1",
                     "--master_port", "13320",
                     "/data/kide004/repos/VideoMAE/run_cross_finetuning.py",
                     "--cross_attn",
-                    "--model", "cross_vit_base_patch16_224",
+                    "--model", "adapter_cross_vit_base_patch16_224",
                     "--data_set", "MINI_SSV2",
                     "--nb_classes", "87",
                     "--data_path", "/data/kide004/repos/VideoMAE/dataset/mini-ssv2",
@@ -41,7 +41,7 @@
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
                     "--dist_eval",
-                    "--non_freeze_block_names", "norm","linear","cross","head","fc_norm"
+                    "--non_freeze_block_names", "adapter","cross","head","fc_norm","patch_embed"
                ]
           }
      ]

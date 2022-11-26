@@ -31,6 +31,19 @@ class DropPath(nn.Module):
     def extra_repr(self) -> str:
         return 'p={}'.format(self.drop_prob)
 
+class Adapter(nn.Module):
+    """linear projection original to down and resotre original dimension
+    """
+    def __init__(self, dim, down_ratio):
+        super().__init__()
+        self.down_ratio = down_ratio
+        self.linear_down = nn.Linear(dim, dim //self.down_ratio, bias=True)
+        self.act = nn.GELU()
+        self.linear_up = nn.Linear(dim//self.down_ratio, dim, bias=True)
+        
+    def forward(self, x):
+        x = self.linear_up(self.act(self.linear_down(x)))
+        return x
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
@@ -161,16 +174,19 @@ class Block(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
                  drop_path=0., init_values=None, act_layer=nn.GELU, norm_layer=nn.LayerNorm,
-                 attn_head_dim=None):
+                 attn_head_dim=None, down_ratio=None):
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
         
-        self.linear_norm = norm_layer(dim)
-        self.linear_down = nn.Linear(dim, dim // 2, bias=True)
-        self.linear_up = nn.Linear(dim//2, dim, bias=True)
+        if down_ratio == None:
+            self.adapter_norm = nn.Identity()
+            self.adapter = nn.Identity()
+        else:
+            self.adapter_norm = norm_layer(dim)
+            self.adapter = Adapter(dim, down_ratio)
         
         self.cross_norm = norm_layer(dim)
         self.cross = CrossAttention(
@@ -192,7 +208,7 @@ class Block(nn.Module):
     def forward(self,s_x, t_x):
         if self.gamma_1 is None:
             t_x = t_x + self.drop_path(self.attn(self.norm1(t_x)))
-            t_x = t_x + self.drop_path(self.linear_up(self.linear_down(self.linear_norm(t_x))))
+            t_x = t_x + self.drop_path(self.adapter(self.adapter_norm(t_x))) # for adapter layer
             t_x = t_x + self.drop_path(self.cross(s_x, self.cross_norm(t_x)))
             t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x)))
         else:
@@ -268,6 +284,7 @@ class CrossTransformer(nn.Module):
                  all_frames=16,
                  tubelet_size=2,
                  use_mean_pooling=True,
+                 down_ratio=None, # down proj ratio for adapter
                  pretrained_cfg = None):
         
         super().__init__()
@@ -292,7 +309,7 @@ class CrossTransformer(nn.Module):
             Block(
                 dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
                 drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,
-                init_values=init_values)
+                init_values=init_values, down_ratio=down_ratio)
             for i in range(depth)])
         self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
         self.fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
@@ -367,6 +384,15 @@ def cross_vit_base_patch16_224(pretrained=False, **kwargs):
     model = CrossTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+    #model.default_cfg = _cfg()
+    return model
+
+# adapter model
+@register_model 
+def adapter_cross_vit_base_patch16_224(pretrained=False, **kwargs):
+    model = CrossTransformer(
+        patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),down_ratio=2, **kwargs)
     #model.default_cfg = _cfg()
     return model
 
