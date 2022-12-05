@@ -9,6 +9,8 @@ from timm.utils import accuracy, ModelEma
 import utils
 from scipy.special import softmax
 from einops import rearrange
+from torchviz import make_dot
+from torch.autograd import Variable
 
 def cross_train_class_batch(model, s_samples, t_samples, target, criterion):
     outputs = model(s_samples, t_samples)
@@ -60,11 +62,9 @@ def train_one_epoch(model: torch.nn.Module, clip_model: torch.nn.Module, criteri
         if mixup_fn is not None:
             samples, targets = mixup_fn(samples, targets)
         
-        s_samples = rearrange(samples, 'b c t h w -> (b t) c h w').to(device, non_blocking=True)
+        s_samples = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True) # pick center frame
         with torch.no_grad():
             s_samples = clip_model.encode_image(s_samples)
-        s_samples = rearrange(s_samples, '(b t) hidden_dim -> b t hidden_dim', b=batch)
-        s_samples = s_samples[:, 8, :].unsqueeze(dim=1) # using center frame
 
         if loss_scaler is None:
             s_samples, samples = s_samples.half(), samples.half()
@@ -75,7 +75,6 @@ def train_one_epoch(model: torch.nn.Module, clip_model: torch.nn.Module, criteri
                 loss, output = cross_train_class_batch(
                     model, s_samples, samples, targets, criterion)
         loss_value = loss.item()
-        #make_dot(loss, params=dict(model.named_parameters())).render(f'graph_ver2', format='png')        
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))

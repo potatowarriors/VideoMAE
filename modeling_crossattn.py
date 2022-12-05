@@ -130,11 +130,11 @@ class CrossAttention(nn.Module):
         self.t_q = nn.Linear(dim, all_head_dim, bias=False)
         self.s_kv = nn.Linear(dim, all_head_dim * 2, bias=False)
         if qkv_bias:
-            self.cross_t_q_bias = nn.Parameter(torch.zeros(all_head_dim))
-            self.cross_s_v_bias = nn.Parameter(torch.zeros(all_head_dim))
+            self.t_q_bias = nn.Parameter(torch.zeros(all_head_dim), requires_grad=True)
+            self.s_v_bias = nn.Parameter(torch.zeros(all_head_dim), requires_grad=True)
         else:
-            self.cross_t_q_bias = None
-            self.cross_s_v_bias = None
+            self.t_q_bias = None
+            self.s_v_bias = None
 
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(all_head_dim, dim)
@@ -145,9 +145,9 @@ class CrossAttention(nn.Module):
         _, t_N, C = t_x.shape
         cross_q_bias = None
         cross_kv_bias = None
-        if self.cross_t_q_bias is not None:
-            cross_q_bias = self.cross_t_q_bias
-            cross_kv_bias = torch.cat((torch.zeros_like(self.cross_s_v_bias, requires_grad=False), self.cross_s_v_bias))
+        if self.t_q_bias is not None:
+            cross_q_bias = self.t_q_bias
+            cross_kv_bias = torch.cat((torch.zeros_like(self.s_v_bias, requires_grad=False), self.s_v_bias))
         # qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         
         # querry = temporal input
@@ -160,7 +160,6 @@ class CrossAttention(nn.Module):
 
         q = q * self.scale
         attn = (q @ k.transpose(-2, -1))
-
         
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
@@ -182,8 +181,8 @@ class Block(nn.Module):
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
         
         if down_ratio == None:
-            self.adapter_norm = nn.Identity()
-            self.adapter = nn.Identity()
+            self.adapter_norm = None
+            self.adapter = None
         else:
             self.adapter_norm = norm_layer(dim)
             self.adapter = Adapter(dim, down_ratio)
@@ -205,13 +204,16 @@ class Block(nn.Module):
         else:
             self.gamma_1, self.gamma_2, self.gamma_3 = None, None, None
 
+
     def forward(self,s_x, t_x):
         if self.gamma_1 is None:
-            t_x = t_x + self.drop_path(self.attn(self.norm1(t_x)))
-            t_x = t_x + self.drop_path(self.adapter(self.adapter_norm(t_x))) # for adapter layer
-            t_x = t_x + self.drop_path(self.cross(s_x, self.cross_norm(t_x)))
-            t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x)))
-        else:
+            t_x = t_x + self.attn(self.norm1(t_x))
+            # if self.adapter != None:
+            #     t_x = t_x + self.drop_path(self.adapter(self.adapter_norm(t_x))) # for adapter layer
+            #t_x = self.cross_norm(t_x) # s_x 에서 gradient가 끊겨서 norm 이후에 residual connection을 붙여야 한다.
+            t_x = t_x + self.cross(s_x, self.cross_norm(t_x))
+            t_x = t_x + self.mlp(self.norm2(t_x))
+        else: # 현재는 감마를 쓸 일이 없으니까 미구현상태로 둔다.
             t_x = t_x + self.drop_path(self.gamma_1 * self.attn(self.norm1(t_x)))
             t_x = t_x + self.drop_path(self.gamma_2 * self.cross(s_x, self.norm2(t_x)))
             t_x = t_x + self.drop_path(self.gamma_3 * self.mlp(self.norm3(t_x)))
