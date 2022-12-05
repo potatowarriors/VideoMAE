@@ -41,7 +41,7 @@
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
                     "--dist_eval",
-                    //"--freeze_block_names", "attn", "mlp"
+                    "--freeze_block_names", "attn"
                ]
           }
      ]
