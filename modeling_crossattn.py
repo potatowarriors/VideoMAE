@@ -207,12 +207,11 @@ class Block(nn.Module):
 
     def forward(self,s_x, t_x):
         if self.gamma_1 is None:
-            t_x = t_x + self.attn(self.norm1(t_x))
-            # if self.adapter != None:
-            #     t_x = t_x + self.drop_path(self.adapter(self.adapter_norm(t_x))) # for adapter layer
-            #t_x = self.cross_norm(t_x) # s_x 에서 gradient가 끊겨서 norm 이후에 residual connection을 붙여야 한다.
-            t_x = t_x + self.cross(s_x, self.cross_norm(t_x))
-            t_x = t_x + self.mlp(self.norm2(t_x))
+            t_x = t_x + self.drop_path(self.attn(self.norm1(t_x)))
+            if self.adapter != None:
+                t_x = t_x + self.drop_path(self.adapter(self.adapter_norm(t_x))) # for adapter layer
+            t_x = t_x + self.drop_path(self.cross(s_x, self.cross_norm(t_x)))
+            t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x)))
         else: # 현재는 감마를 쓸 일이 없으니까 미구현상태로 둔다.
             t_x = t_x + self.drop_path(self.gamma_1 * self.attn(self.norm1(t_x)))
             t_x = t_x + self.drop_path(self.gamma_2 * self.cross(s_x, self.norm2(t_x)))

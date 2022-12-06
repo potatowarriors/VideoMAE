@@ -12,7 +12,7 @@
                "console": "integratedTerminal",
                "justMyCode": true,
                "args" : [
-                    "--nproc_per_node", "1",
+                    "--nproc_per_node", "8",
                     "--master_port", "13320",
                     "/data/kide004/repos/VideoMAE/run_cross_finetuning.py",
                     "--cross_attn",
@@ -20,10 +20,10 @@
                     "--data_set", "MINI_SSV2",
                     "--nb_classes", "87",
                     "--data_path", "/data/kide004/repos/VideoMAE/dataset/mini-ssv2",
-                    "--finetune", "/data/kide004/repos/VideoMAE/pre-trained/ssv2_pretrained.pth",
-                    "--log_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
-                    "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
-                    "--batch_size", "8",
+                    "--finetune", "/data/kide004/repos/VideoMAE/train_sh/fixbug_non_updated_004d8a5e294964c9699a00bd2748b7d752737f52/all_training/output/checkpoint-49/mp_rank_00_model_states.pt",
+                    "--log_dir", "/data/kide004/repos/VideoMAE/train_sh/fixbug_non_updated_004d8a5e294964c9699a00bd2748b7d752737f52/all_training/eval",
+                    "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/fixbug_non_updated_004d8a5e294964c9699a00bd2748b7d752737f52/all_training/eval",
+                    "--batch_size", "10",
                     "--num_sample", "1",
                     "--epochs", "10",
                     "--save_ckpt_freq", "1",
@@ -35,13 +35,10 @@
                     "--lr", "0.1",
                     "--opt_betas", "0.9","0.999",
                     "--weight_decay", "0.05",
-                    "--mixup", "0",
-                    "--cutmix", "0",
                     "--test_num_segment", "2",
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
-                    "--dist_eval",
-                    "--freeze_block_names", "attn"
+                    "--eval"
                ]
           }
      ]
