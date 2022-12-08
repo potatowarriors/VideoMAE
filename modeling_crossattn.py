@@ -187,7 +187,7 @@ class Block(nn.Module):
             self.adapter_norm = norm_layer(dim)
             self.adapter = Adapter(dim, down_ratio)
         
-        self.cross_norm = norm_layer(dim)
+        self.s2t_norm = norm_layer(dim)
         self.cross = CrossAttention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
