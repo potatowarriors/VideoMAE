@@ -180,13 +180,6 @@ class Block(nn.Module):
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
         
-        if down_ratio == None:
-            self.adapter_norm = None
-            self.adapter = None
-        else:
-            self.adapter_norm = norm_layer(dim)
-            self.adapter = Adapter(dim, down_ratio)
-        
         self.s2t_norm = norm_layer(dim)
         self.cross = CrossAttention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
@@ -196,6 +189,11 @@ class Block(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        
+        if down_ratio == None:
+            self.adapter = None
+        else:
+            self.adapter = Adapter(dim, down_ratio)
 
         if init_values > 0:
             self.gamma_1 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
@@ -208,10 +206,12 @@ class Block(nn.Module):
     def forward(self,s_x, t_x):
         if self.gamma_1 is None:
             t_x = t_x + self.drop_path(self.attn(self.norm1(t_x)))
-            if self.adapter != None:
-                t_x = t_x + self.drop_path(self.adapter(self.adapter_norm(t_x))) # for adapter layer
             t_x = t_x + self.drop_path(self.cross(s_x, self.s2t_norm(t_x)))
-            t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x)))
+            if self.adapter != None:
+                t_x = t_x + self.drop_path(self.adapter(self.mlp(self.norm2(t_x)))) # for adapter layer
+            else:
+                t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x)))
+                
         else: # 현재는 감마를 쓸 일이 없으니까 미구현상태로 둔다.
             t_x = t_x + self.drop_path(self.gamma_1 * self.attn(self.norm1(t_x)))
             t_x = t_x + self.drop_path(self.gamma_2 * self.cross(s_x, self.norm2(t_x)))
