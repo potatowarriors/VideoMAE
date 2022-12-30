@@ -10,8 +10,8 @@ import utils
 from scipy.special import softmax
 from einops import rearrange
 
-def cross_train_class_batch(model, samples, target, criterion):
-    outputs = model(samples)
+def cross_train_class_batch(model,center_frame ,samples, target, criterion):
+    outputs = model(center_frame, samples)
     loss = criterion(outputs, target)
     return loss, outputs
 
@@ -55,19 +55,20 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         samples = samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
-        batch = samples.shape[0]
 
         if mixup_fn is not None:
             samples, targets = mixup_fn(samples, targets)
 
+        center_frame = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True)
+        
         if loss_scaler is None:
-            samples = samples.half()
+            samples,center_frame = samples.half(), center_frame.half()
             loss, output = cross_train_class_batch(
-                model, samples, targets, criterion)
+                model,center_frame, samples, targets, criterion)
         else:
             with torch.cuda.amp.autocast():
                 loss, output = cross_train_class_batch(
-                    model, samples, targets, criterion)
+                    model,center_frame ,samples, targets, criterion)
         loss_value = loss.item()
         #make_dot(loss, params=dict(model.named_parameters())).render(f'graph_ver2', format='png')        
 
