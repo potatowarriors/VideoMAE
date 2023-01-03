@@ -157,11 +157,12 @@ def validation_one_epoch(data_loader, model, device):
         target = batch[1]
         batch_size = samples.shape[0]
         samples = samples.to(device, non_blocking=True)
+        center_frame = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(samples)
+            output = model(center_frame, samples)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -197,11 +198,12 @@ def final_test(data_loader, model, device, file):
         split_nb = batch[4]
         batch_size = samples.shape[0]
         samples = samples.to(device, non_blocking=True)
+        center_frame = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(samples)
+            output = model(center_frame, samples)
             loss = criterion(output, target)
 
         for i in range(output.size(0)):

@@ -424,7 +424,7 @@ class STCrossTransformer(nn.Module):
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        return {'patch_embed', 'cls_token'}
+        return {'patch_embed', 'cls_token', 'clip_conv1'}
 
     def get_classifier(self):
         return self.head
