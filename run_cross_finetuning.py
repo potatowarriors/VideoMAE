@@ -19,12 +19,11 @@ from optim_factory import create_optimizer, get_parameter_groups, LayerDecayValu
 
 from datasets import build_dataset
 from engine_for_crossattn import train_one_epoch, validation_one_epoch, final_test, merge
-from utils import NativeScalerWithGradNormCount as NativeScaler, change_verification_mode, freeze_stlayers
-from utils import  cross_multiple_samples_collate
+from utils import NativeScalerWithGradNormCount as NativeScaler, laod_pretrained_weight, change_verification_mode, freeze_stlayers
+from utils import cross_multiple_samples_collate
 import utils
+import clip_base.clip as clip
 import modeling_finetune
-#add new code
-import modeling_crossattn
 
 
 def get_args():
@@ -35,7 +34,7 @@ def get_args():
     parser.add_argument('--save_ckpt_freq', default=100, type=int)
 
     # Model parameters
-    parser.add_argument('--model', default='cross_vit_base_patch16_224', type=str, metavar='MODEL',
+    parser.add_argument('--model', default='vit_base_patch16_224', type=str, metavar='MODEL',
                         help='Name of model to train')
     parser.add_argument('--tubelet_size', type=int, default= 2)
     parser.add_argument('--input_size', default=224, type=int,
@@ -302,7 +301,7 @@ def main(args, ds_init):
             prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
             label_smoothing=args.smoothing, num_classes=args.nb_classes)
 
-    model = create_model(
+    temporal_model = create_model(
         args.model,
         pretrained=False,
         num_classes=args.nb_classes,
@@ -312,7 +311,7 @@ def main(args, ds_init):
         drop_path_rate=args.drop_path,
         attn_drop_rate=args.attn_drop_rate,
         drop_block_rate=None,
-        use_mean_pooling=args.use_mean_pooling,
+        use_mean_pooling=False,
         init_scale=args.init_scale,
     )
 
@@ -323,88 +322,10 @@ def main(args, ds_init):
     
 
     if args.finetune:
-        if args.finetune.startswith('https'):
-            checkpoint = torch.hub.load_state_dict_from_url(
-                args.finetune, map_location='cpu', check_hash=True)
-        else:
-            checkpoint = torch.load(args.finetune, map_location='cpu')
-
-        print("Load ckpt from %s" % args.finetune)
-        checkpoint_model = None
-        clip_checkpoint = torch.jit.load('/data/kide004/repos/VideoMAE/pre-trained/ViT-B-16.pt', map_location='cpu')
-        checkpoint_clip = clip_checkpoint.visual.state_dict()
-        for model_key in args.model_key.split('|'):
-            if model_key in checkpoint:
-                checkpoint_model = checkpoint[model_key]
-                print("Load state_dict by model_key = %s" % model_key)
-                break
-        if checkpoint_model is None:
-            checkpoint_model = checkpoint
-        state_dict = model.state_dict()
-        for k in ['head.weight', 'head.bias']:
-            if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
-                print(f"Removing key {k} from pretrained checkpoint")
-                del checkpoint_model[k]
-
-        all_keys = list(checkpoint_model.keys())
-        clip_all_keys = list(checkpoint_clip.keys())
-        new_dict = OrderedDict()
-        for key in all_keys:
-            if key.startswith('backbone.'):
-                new_dict[key[9:]] = checkpoint_model[key]
-            elif key.startswith('encoder.'):
-                new_dict[key[8:]] = checkpoint_model[key]
-            else:
-                new_dict[key] = checkpoint_model[key]
+        laod_pretrained_weight(temporal_model, args.finetune, args)
                 
-        # add new code for load clip weight
-        for key in clip_all_keys:
-            if key.startswith('transformer.'):
-                if key[23] == '.':
-                    new_dict['blocks.'+ key[22] + '.clip_' + key[24:]] = checkpoint_clip[key]
-                else : # layer10 ~ 11 process
-                    new_dict['blocks.'+ key[22:24] + '.clip_' + key[25:]] = checkpoint_clip[key]
-            else:
-                new_dict['clip_' + key] = checkpoint_clip[key]
-                
-        # load로 불러온 pre-trained weight를 new_dict에 담아주고
-        checkpoint_model = new_dict
-
-        # interpolate position embedding
-        if 'pos_embed' in checkpoint_model:
-            pos_embed_checkpoint = checkpoint_model['pos_embed']
-            embedding_size = pos_embed_checkpoint.shape[-1] # channel dim
-            num_patches = model.patch_embed.num_patches # 
-            num_extra_tokens = model.pos_embed.shape[-2] - num_patches # 0/1
-
-            # height (== width) for the checkpoint position embedding 
-            orig_size = int(((pos_embed_checkpoint.shape[-2] - num_extra_tokens)//(args.num_frames // model.patch_embed.tubelet_size)) ** 0.5)
-            # height (== width) for the new position embedding
-            new_size = int((num_patches // (args.num_frames // model.patch_embed.tubelet_size) )** 0.5)
-            # class_token and dist_token are kept unchanged
-            if orig_size != new_size:
-                print("Position interpolate from %dx%d to %dx%d" % (orig_size, orig_size, new_size, new_size))
-                extra_tokens = pos_embed_checkpoint[:, :num_extra_tokens]
-                # only the position tokens are interpolated
-                pos_tokens = pos_embed_checkpoint[:, num_extra_tokens:]
-                # B, L, C -> BT, H, W, C -> BT, C, H, W
-                pos_tokens = pos_tokens.reshape(-1, args.num_frames // model.patch_embed.tubelet_size, orig_size, orig_size, embedding_size)
-                pos_tokens = pos_tokens.reshape(-1, orig_size, orig_size, embedding_size).permute(0, 3, 1, 2)
-                pos_tokens = torch.nn.functional.interpolate(
-                    pos_tokens, size=(new_size, new_size), mode='bicubic', align_corners=False)
-                # BT, C, H, W -> BT, H, W, C ->  B, T, H, W, C
-                pos_tokens = pos_tokens.permute(0, 2, 3, 1).reshape(-1, args.num_frames // model.patch_embed.tubelet_size, new_size, new_size, embedding_size) 
-                pos_tokens = pos_tokens.flatten(1, 3) # B, L, C
-                new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
-                checkpoint_model['pos_embed'] = new_pos_embed
-
-        utils.load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
-
-    model.to(device)
-    
-    # freeze space-time joint attention layers
-    if args.freeze_layers:
-        freeze_stlayers(model)
+    temporal_model.to(device)
+    model, _ = clip.load('/data/kide004/repos/VideoMAE/pre-trained/ViT-B-16.pt',device='cuda')
     
     
     model_ema = None
@@ -520,7 +441,7 @@ def main(args, ds_init):
         if log_writer is not None:
             log_writer.set_step(epoch * num_training_steps_per_epoch * args.update_freq)
         train_stats = train_one_epoch(
-            model, criterion, data_loader_train, optimizer,
+            model, temporal_model, criterion, data_loader_train, optimizer,
             device, epoch, loss_scaler, args.clip_grad, model_ema, mixup_fn,
             log_writer=log_writer, start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values,
@@ -532,7 +453,7 @@ def main(args, ds_init):
                     args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                     loss_scaler=loss_scaler, epoch=epoch, model_ema=model_ema)
         if data_loader_val is not None:
-            test_stats = validation_one_epoch(data_loader_val, model, device)
+            test_stats = validation_one_epoch(data_loader_val, model, temporal_model, device)
             print(f"Accuracy of the network on the {len(dataset_val)} val videos: {test_stats['acc1']:.1f}%")
             if max_accuracy < test_stats["acc1"]:
                 max_accuracy = test_stats["acc1"]
@@ -562,7 +483,7 @@ def main(args, ds_init):
                 f.write(json.dumps(log_stats) + "\n")
 
     preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
-    test_stats = final_test(data_loader_test, model, device, preds_file)
+    test_stats = final_test(data_loader_test, model, temporal_model,device, preds_file)
     torch.distributed.barrier()
     if global_rank == 0:
         print("Start merging results...")

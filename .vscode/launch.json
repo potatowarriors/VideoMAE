@@ -15,10 +15,10 @@
                     "--nproc_per_node", "1",
                     "--master_port", "12330",
                     "/data/kide004/repos/VideoMAE/run_cross_finetuning.py",
-                    "--model", "cross_vit_base_patch16_224",
-                    "--data_set", "SSV2",
-                    "--nb_classes", "174",
-                    "--data_path", "/data/kide004/repos/VideoMAE/dataset/ssv2",
+                    "--model", "vit_base_patch16_224",
+                    "--data_set", "MINI_SSV2",
+                    "--nb_classes", "87",
+                    "--data_path", "/data/kide004/repos/VideoMAE/dataset/mini-ssv2",
                     "--finetune", "/data/kide004/repos/VideoMAE/pre-trained/ssv2_pretrained.pth",
                     "--log_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
                     "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
@@ -38,6 +38,7 @@
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
                     "--dist_eval",
+               ]
           }
      ]
 }

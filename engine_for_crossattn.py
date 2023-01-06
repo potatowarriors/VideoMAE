@@ -10,8 +10,8 @@ import utils
 from scipy.special import softmax
 from einops import rearrange
 
-def cross_train_class_batch(model,center_frame ,samples, target, criterion):
-    outputs = model(center_frame, samples)
+def cross_train_class_batch(model,center_frame , t_x, target, criterion):
+    outputs = model(center_frame, t_x)
     loss = criterion(outputs, target)
     return loss, outputs
 
@@ -21,13 +21,14 @@ def get_loss_scale_for_deepspeed(model):
     return optimizer.loss_scale if hasattr(optimizer, "loss_scale") else optimizer.cur_scale
 
 
-def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
+def train_one_epoch(model: torch.nn.Module, temporal_model : torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None, log_writer=None,
                     start_steps=None, lr_schedule_values=None, wd_schedule_values=None,
                     num_training_steps_per_epoch=None, update_freq=None):
     model.train(True)
+    temporal_model.eval()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('min_lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
@@ -60,11 +61,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             samples, targets = mixup_fn(samples, targets)
 
         center_frame = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True)
+        samples = samples.half()
+        with torch.no_grad():
+            with torch.cuda.amp.autocast():
+                t_x = temporal_model(samples)
         
         if loss_scaler is None:
-            samples,center_frame = samples.half(), center_frame.half()
+            center_frame = center_frame.half()
             loss, output = cross_train_class_batch(
-                model,center_frame, samples, targets, criterion)
+                model,center_frame, t_x, targets, criterion)
         else:
             with torch.cuda.amp.autocast():
                 loss, output = cross_train_class_batch(
@@ -143,7 +148,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
-def validation_one_epoch(data_loader, model, device):
+def validation_one_epoch(data_loader, model, temporal_model, device):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -151,6 +156,7 @@ def validation_one_epoch(data_loader, model, device):
 
     # switch to evaluation mode
     model.eval()
+    temporal_model.eval()
 
     for batch in metric_logger.log_every(data_loader, 10, header):
         samples = batch[0]
@@ -159,10 +165,12 @@ def validation_one_epoch(data_loader, model, device):
         samples = samples.to(device, non_blocking=True)
         center_frame = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
-
+        
+        with torch.no_grad():
+            t_x = temporal_model(samples)
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(center_frame, samples)
+            output = model(center_frame, t_x)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -180,7 +188,7 @@ def validation_one_epoch(data_loader, model, device):
 
 
 @torch.no_grad()
-def final_test(data_loader, model, device, file):
+def final_test(data_loader, model, temporal_model, device, file):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -188,6 +196,7 @@ def final_test(data_loader, model, device, file):
 
     # switch to evaluation mode
     model.eval()
+    temporal_model.eval()
     final_result = []
     
     for batch in metric_logger.log_every(data_loader, 10, header):
@@ -200,10 +209,13 @@ def final_test(data_loader, model, device, file):
         samples = samples.to(device, non_blocking=True)
         center_frame = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
+        
+        with torch.no_grad():
+            t_x = temporal_model(samples)
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(center_frame, samples)
+            output = model(center_frame, t_x)
             loss = criterion(output, target)
 
         for i in range(output.size(0)):

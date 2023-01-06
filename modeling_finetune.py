@@ -220,16 +220,16 @@ class VisionTransformer(nn.Module):
             for i in range(depth)])
         self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
         self.fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
-        self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+        # self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
         if use_learnable_pos_emb:
             trunc_normal_(self.pos_embed, std=.02)
 
-        trunc_normal_(self.head.weight, std=.02)
+        # trunc_normal_(self.head.weight, std=.02)
         self.apply(self._init_weights)
 
-        self.head.weight.data.mul_(init_scale)
-        self.head.bias.data.mul_(init_scale)
+        # self.head.weight.data.mul_(init_scale)
+        # self.head.bias.data.mul_(init_scale)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -267,14 +267,15 @@ class VisionTransformer(nn.Module):
 
         x = self.norm(x)
         # mean pooling 관련 코드
-        if self.fc_norm is not None:
-            return self.fc_norm(x.mean(1))
-        else:
-            return x[:, 0]
+        # if self.fc_norm is not None:
+        #     return self.fc_norm(x.mean(1))
+        # else:
+        #     return x[:, 0]
+        return x
 
     def forward(self, x):
         x = self.forward_features(x)
-        x = self.head(x)
+        # x = self.head(x)
         return x
 
 @register_model
@@ -290,7 +291,7 @@ def vit_base_patch16_224(pretrained=False, **kwargs):
     model = VisionTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    #model.default_cfg = _cfg()
+    model.default_cfg = _cfg()
     return model
 
 
