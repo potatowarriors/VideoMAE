@@ -228,8 +228,6 @@ class ResidualAttentionBlock(nn.Module):
 
         self.attn = nn.MultiheadAttention(d_model, n_head)
         self.ln_1 = LayerNorm(d_model)
-        self.t2s = CrossAttentionT2S(d_model, n_head)
-        self.ln_t2s = LayerNorm(d_model)
         self.mlp = nn.Sequential(OrderedDict([
             ("c_fc", nn.Linear(d_model, d_model * 4)),
             ("gelu", QuickGELU()),
@@ -242,11 +240,10 @@ class ResidualAttentionBlock(nn.Module):
         self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
         return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
-    def forward(self, s_x, t_x):
-        s_x = s_x + self.attention(self.ln_1(s_x))
-        s_x = s_x + self.t2s(self.ln_t2s(s_x),t_x)
-        s_x = s_x + self.mlp(self.ln_2(s_x))
-        return s_x
+    def forward(self, x):
+        x = x + self.attention(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
 
 
 class Transformer(nn.Module):
@@ -256,9 +253,9 @@ class Transformer(nn.Module):
         self.layers = layers
         self.resblocks = nn.ModuleList([ResidualAttentionBlock(width, heads, attn_mask) for _ in range(layers)])
 
-    def forward(self, x: torch.Tensor, t_x: torch.Tensor):
+    def forward(self, x: torch.Tensor):
         for blk in self.resblocks:
-            x = blk(x, t_x)
+            x = blk(x)
         return x
 
 
@@ -280,7 +277,7 @@ class VisionTransformer(nn.Module):
         self.layers = layers
         
 
-    def forward(self, x: torch.Tensor, t_x: torch.Tensor):
+    def forward(self, x: torch.Tensor):
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
@@ -289,7 +286,7 @@ class VisionTransformer(nn.Module):
         x = self.ln_pre(x)
 
         x = x.permute(1, 0, 2)  # NLD -> LND
-        x = self.transformer(x, t_x)
+        x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
 
         x = self.ln_post(x[:, 0, :])
@@ -347,15 +344,15 @@ class CLIP(nn.Module):
     def dtype(self):
         return self.visual.conv1.weight.dtype
 
-    def encode_image(self, s_x, t_x):
-        return self.visual(s_x, t_x)
+    def encode_image(self, x):
+        return self.visual(x)
 
 
-    def forward(self, s_x, t_x):
-        s_x = self.encode_image(s_x, t_x)
-        s_x = self.head(s_x)
+    def forward(self, x):
+        x = self.encode_image(x)
+        x = self.head(x)
         
-        return s_x
+        return x
 
 
 def convert_weights(model: nn.Module):
