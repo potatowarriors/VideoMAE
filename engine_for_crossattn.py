@@ -10,8 +10,8 @@ import utils
 from scipy.special import softmax
 from einops import rearrange
 
-def cross_train_class_batch(model,center_frame, target, criterion):
-    outputs = model(center_frame)
+def cross_train_class_batch(model,samples, target, criterion):
+    outputs = model(samples)
     loss = criterion(outputs, target)
     return loss, outputs
 
@@ -59,17 +59,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         if mixup_fn is not None:
             samples, targets = mixup_fn(samples, targets)
 
-        center_frame = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True)
         samples = samples.half()
         
         if loss_scaler is None:
-            center_frame = center_frame.half()
             loss, output = cross_train_class_batch(
-                model, center_frame, targets, criterion)
+                model, samples, targets, criterion)
         else:
             with torch.cuda.amp.autocast():
                 loss, output = cross_train_class_batch(
-                    model, center_frame, targets, criterion)
+                    model, samples, targets, criterion)
         loss_value = loss.item()
         #make_dot(loss, params=dict(model.named_parameters())).render(f'graph_ver2', format='png')        
 
@@ -158,12 +156,11 @@ def validation_one_epoch(data_loader, model, device):
         target = batch[1]
         batch_size = samples.shape[0]
         samples = samples.to(device, non_blocking=True)
-        center_frame = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
         
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(center_frame)
+            output = model(samples)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -199,12 +196,11 @@ def final_test(data_loader, model, device, file):
         split_nb = batch[4]
         batch_size = samples.shape[0]
         samples = samples.to(device, non_blocking=True)
-        center_frame = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(center_frame)
+            output = model(samples)
             loss = criterion(output, target)
 
         for i in range(output.size(0)):

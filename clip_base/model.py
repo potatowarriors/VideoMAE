@@ -278,6 +278,8 @@ class VisionTransformer(nn.Module):
         
 
     def forward(self, x: torch.Tensor):
+        b, t = x.shape[0], x.shape[2]
+        x = rearrange(x, 'b c t h w -> (b t) c h w')
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
@@ -288,8 +290,12 @@ class VisionTransformer(nn.Module):
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
+        
+        x = rearrange(x, '(b t) n d -> b t n d', t=t)
 
-        x = self.ln_post(x[:, 0, :])
+        x = self.ln_post(x[:, :, 0, :])
+        
+        x = x.mean(dim=1)
 
         return x
 
