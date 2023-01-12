@@ -220,16 +220,16 @@ class VisionTransformer(nn.Module):
             for i in range(depth)])
         self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
         self.fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
-        # self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+        self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
         if use_learnable_pos_emb:
             trunc_normal_(self.pos_embed, std=.02)
 
-        # trunc_normal_(self.head.weight, std=.02)
+        trunc_normal_(self.head.weight, std=.02)
         self.apply(self._init_weights)
 
-        # self.head.weight.data.mul_(init_scale)
-        # self.head.bias.data.mul_(init_scale)
+        self.head.weight.data.mul_(init_scale)
+        self.head.bias.data.mul_(init_scale)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -267,15 +267,14 @@ class VisionTransformer(nn.Module):
 
         x = self.norm(x)
         # mean pooling 관련 코드
-        # if self.fc_norm is not None:
-        #     return self.fc_norm(x.mean(1))
-        # else:
-        #     return x[:, 0]
-        return x
+        if self.fc_norm is not None:
+            return self.fc_norm(x.mean(1))
+        else:
+            return x[:, 0]
 
     def forward(self, x):
         x = self.forward_features(x)
-        # x = self.head(x)
+        x = self.head(x)
         return x
 
 @register_model

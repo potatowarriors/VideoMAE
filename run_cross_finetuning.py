@@ -138,6 +138,7 @@ def get_args():
     # Dataset parameters
     parser.add_argument('--data_path', default='/path/to/list_kinetics-400', type=str,
                         help='dataset path')
+    parser.add_argument('--anno_path', default=None, type=str, help='annotation path')
     parser.add_argument('--eval_data_path', default=None, type=str,
                         help='dataset path for evaluation')
     parser.add_argument('--nb_classes', default=400, type=int,
