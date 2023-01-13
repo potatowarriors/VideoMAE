@@ -315,7 +315,7 @@ class CLIP(nn.Module):
             layers=vision_layers,
             heads=vision_heads,)
         
-        self.head = nn.Linear(vision_width, 87) # 수동으로 class 수 맞춰줘야함 load엑서 변수가 통제되어있음
+        self.head = nn.Linear(vision_width, 300) # 수동으로 class 수 맞춰줘야함 load엑서 변수가 통제되어있음
 
         self.initialize_parameters()
         
