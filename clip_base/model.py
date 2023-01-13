@@ -278,8 +278,13 @@ class VisionTransformer(nn.Module):
         
 
     def forward(self, x: torch.Tensor):
-        b, t = x.shape[0], x.shape[2]
-        x = rearrange(x, 'b c t h w -> (b t) c h w')
+        fusion = None
+        if len(x.shape) == 5:
+            fusion = True
+        
+        if fusion:
+            b, t = x.shape[0], x.shape[2]
+            x = rearrange(x, 'b c t h w -> (b t) c h w')
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
@@ -291,11 +296,15 @@ class VisionTransformer(nn.Module):
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
         
-        x = rearrange(x, '(b t) n d -> b t n d', t=t)
+        if fusion:
+            x = rearrange(x, '(b t) n d -> b t n d', t=t)
 
-        x = self.ln_post(x[:, :, 0, :])
+        if fusion:
+            x = self.ln_post(x[:, :, 0, :])
+            x = x.mean(dim=1)
+        else:
+            x = self.ln_post(x[:, 0, :])
         
-        x = x.mean(dim=1)
 
         return x
 
@@ -318,7 +327,7 @@ class CLIP(nn.Module):
             layers=vision_layers,
             heads=vision_heads,)
         
-        self.head = nn.Linear(vision_width, 87) # 수동으로 class 수 맞춰줘야함 load엑서 변수가 통제되어있음
+        self.head = nn.Linear(vision_width, 300) # 수동으로 class 수 맞춰줘야함 load엑서 변수가 통제되어있음
 
         self.initialize_parameters()
         
