@@ -17,7 +17,7 @@
                     "/data/kide004/repos/VideoMAE/run_cross_finetuning.py",
                     "--model", "vit_base_patch16_224",
                     "--data_set", "EPIC",
-                    "--nb_classes", "300",
+                    "--nb_classes", "29100",
                     "--data_path", "/local_datasets/Epickitchens100_clips/videos",
                     "--anno_path", "/data/kide004/repos/VideoMAE/dataset/epic",
                     "--finetune", "/data/kide004/repos/VideoMAE/pre-trained/ssv2_pretrained.pth",
