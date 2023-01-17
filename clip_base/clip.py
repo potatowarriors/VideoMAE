@@ -89,32 +89,8 @@ def available_models() -> List[str]:
     return list(_MODELS.keys())
 
 
-def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", jit: bool = False, download_root: str = None):
-    """Load a CLIP model
+def load(args, name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", jit: bool = False, download_root: str = None):
 
-    Parameters
-    ----------
-    name : str
-        A model name listed by `clip.available_models()`, or the path to a model checkpoint containing the state_dict
-
-    device : Union[str, torch.device]
-        The device to put the loaded model
-
-    jit : bool
-        Whether to load the optimized JIT model or more hackable non-JIT model (default).
-    
-
-    download_root: str
-        path to download the model files; by default, it uses "~/.cache/clip"
-
-    Returns
-    -------
-    model : torch.nn.Module
-        The CLIP model
-
-    preprocess : Callable[[PIL.Image], torch.Tensor]
-        A torchvision transform that converts a PIL image into a tensor that the returned model can take as its input
-    """
     if name in _MODELS:
         model_path = _download(_MODELS[name], download_root or os.path.expanduser("~/.cache/clip"))
     elif os.path.isfile(name):
@@ -135,7 +111,7 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
             state_dict = torch.load(opened_file, map_location="cpu")
 
     if not jit:
-        model = build_model(state_dict or model.state_dict()).to(device)
+        model = build_model(state_dict or model.state_dict(), args).to(device)
         if str(device) == "cpu":
             model.float()
         return model, _transform(model.visual.input_resolution)

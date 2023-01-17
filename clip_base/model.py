@@ -6,7 +6,23 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from einops import rearrange
+from timm.models.layers import drop_path
 
+
+
+
+class DropPath(nn.Module):
+    """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
+    """
+    def __init__(self, drop_prob=None):
+        super(DropPath, self).__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        return drop_path(x, self.drop_prob, self.training)
+    
+    def extra_repr(self) -> str:
+        return 'p={}'.format(self.drop_prob)
 
 class Bottleneck(nn.Module):
     expansion = 4
@@ -225,7 +241,7 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
 
 
 class ResidualAttentionBlock(nn.Module):
-    def __init__(self, d_model: int, n_head: int, attn_mask: torch.Tensor = None):
+    def __init__(self, d_model: int, n_head: int, drop_path_rate, attn_mask: torch.Tensor = None):
         super().__init__()
 
         self.attn = nn.MultiheadAttention(d_model, n_head)
@@ -238,6 +254,7 @@ class ResidualAttentionBlock(nn.Module):
             ("c_proj", nn.Linear(d_model * 4, d_model))
         ]))
         self.ln_2 = LayerNorm(d_model)
+        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0. else nn.Identity()
         self.attn_mask = attn_mask
 
     def attention(self, x: torch.Tensor):
@@ -245,18 +262,20 @@ class ResidualAttentionBlock(nn.Module):
         return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
     def forward(self, s_x, t_x):
-        s_x = s_x + self.attention(self.ln_1(s_x))
-        s_x = s_x + self.t2s(self.ln_t2s(s_x),t_x)
-        s_x = s_x + self.mlp(self.ln_2(s_x))
+        s_x = s_x + self.drop_path(self.attention(self.ln_1(s_x)))
+        s_x = s_x + self.drop_path(self.t2s(self.ln_t2s(s_x),t_x))
+        s_x = s_x + self.drop_path(self.mlp(self.ln_2(s_x)))
         return s_x
 
 
 class Transformer(nn.Module):
-    def __init__(self, width: int, layers: int, heads: int, attn_mask: torch.Tensor = None):
+    def __init__(self, width: int, layers: int, heads: int, drop_path_rate, attn_mask: torch.Tensor = None):
         super().__init__()
         self.width = width
         self.layers = layers
-        self.resblocks = nn.ModuleList([ResidualAttentionBlock(width, heads, attn_mask) for _ in range(layers)])
+        self.drop_path_rate = drop_path_rate
+        dpr = [x.item() for x in torch.linspace(0, self.drop_path_rate, self.layers)]
+        self.resblocks = nn.ModuleList([ResidualAttentionBlock(width, heads, dpr[i], attn_mask) for i in range(layers)])
 
     def forward(self, x: torch.Tensor, t_x: torch.Tensor):
         for blk in self.resblocks:
@@ -265,7 +284,7 @@ class Transformer(nn.Module):
 
 
 class VisionTransformer(nn.Module):
-    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int):
+    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, drop_path_rate: float):
         super().__init__()
         self.input_resolution = input_resolution
         self.conv1 = nn.Conv2d(in_channels=3, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
@@ -275,7 +294,7 @@ class VisionTransformer(nn.Module):
         self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) ** 2 + 1, width))
         self.ln_pre = LayerNorm(width)
 
-        self.transformer = Transformer(width, layers, heads)
+        self.transformer = Transformer(width, layers, heads, drop_path_rate)
 
         self.ln_post = LayerNorm(width)
         
@@ -311,19 +330,24 @@ class CLIP(nn.Module):
                  vision_layers: Union[Tuple[int, int, int, int], int],
                  vision_width: int,
                  vision_patch_size: int,
+                 num_classes,
+                 drop_path
                  ):
         super().__init__()
 
         vision_heads = vision_width // 64
         self.layers = vision_layers
+        self.drop_path_rate = drop_path
         self.visual = VisionTransformer(
             input_resolution=image_resolution,
             patch_size=vision_patch_size,
             width=vision_width,
             layers=vision_layers,
-            heads=vision_heads,)
+            heads=vision_heads,
+            drop_path_rate=self.drop_path_rate)
         
-        self.head = nn.Linear(vision_width, 300) # 수동으로 class 수 맞춰줘야함 load엑서 변수가 통제되어있음
+        
+        self.head = nn.Linear(vision_width, num_classes) # 수동으로 class 수 맞춰줘야함 load엑서 변수가 통제되어있음
 
         self.initialize_parameters()
         
@@ -390,17 +414,19 @@ def convert_weights(model: nn.Module):
     model.apply(_convert_weights_to_fp16)
 
 
-def build_model(state_dict: dict):
+def build_model(state_dict: dict, args):
     
     vision_width = state_dict["visual.conv1.weight"].shape[0]
     vision_layers = len([k for k in state_dict.keys() if k.startswith("visual.") and k.endswith(".attn.in_proj_weight")])
     vision_patch_size = state_dict["visual.conv1.weight"].shape[-1]
     grid_size = round((state_dict["visual.positional_embedding"].shape[0] - 1) ** 0.5)
     image_resolution = vision_patch_size * grid_size
+    num_classes = args.nb_classes
+    drop_path = args.drop_path
 
 
     model = CLIP(
-        image_resolution, vision_layers, vision_width, vision_patch_size
+        image_resolution, vision_layers, vision_width, vision_patch_size, num_classes, drop_path
     )
 
     for key in ["input_resolution", "context_length", "vocab_size"]:

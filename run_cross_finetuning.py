@@ -326,7 +326,7 @@ def main(args, ds_init):
         laod_pretrained_weight(temporal_model, args.finetune, args)
                 
     temporal_model.to(device)
-    model, _ = clip.load('/data/kide004/repos/VideoMAE/pre-trained/ViT-B-16.pt',device='cuda')
+    model, _ = clip.load(args, '/data/kide004/repos/VideoMAE/pre-trained/ViT-B-16.pt',device='cuda')
     
     
     model_ema = None
