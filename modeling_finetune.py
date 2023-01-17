@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from timm.models.layers import drop_path, to_2tuple, trunc_normal_
 from timm.models.registry import register_model
+from einops import rearrange
 
 
 def _cfg(url='', **kwargs):
@@ -266,12 +267,16 @@ class VisionTransformer(nn.Module):
             x = blk(x)
 
         x = self.norm(x)
-        # mean pooling 관련 코드
+        
+        x = rearrange(x, 'b (t p) d -> b t p d', t=8)
+        
+        return x.mean(dim=2)
+        
+        #mean pooling 관련 코드
         # if self.fc_norm is not None:
         #     return self.fc_norm(x.mean(1))
         # else:
         #     return x[:, 0]
-        return x
 
     def forward(self, x):
         x = self.forward_features(x)

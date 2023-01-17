@@ -195,7 +195,8 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         self.attn_mask = attn_mask
     
     def t2s_cross_attn(self, s_x, t_x):
-        s_x = rearrange(s_x, 's b c -> b s c')
+        s_x = rearrange(s_x, 'p b c -> b p c')
+        s_x = rearrange(s_x, '(b t) p d -> b (t p) d', b=10)
         B, s_N, C = s_x.shape
         _, t_N, C = t_x.shape
         t2s_q_bias = self.t2s_q_bias
@@ -214,6 +215,7 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         
         s_x = (t2s_attn @ t2s_v).transpose(1, 2).reshape(B, s_N, -1)
         s_x = self.t2s_proj(s_x)
+        s_x = rearrange(s_x, 'b (t p) d -> (b t) p d', t =16)
         s_x = rearrange(s_x, 'b s c -> s b c')
         
         return s_x
@@ -281,6 +283,8 @@ class VisionTransformer(nn.Module):
         
 
     def forward(self, x: torch.Tensor, t_x: torch.Tensor):
+        b, t = x.shape[0], x.shape[2]
+        x = rearrange(x, 'b c t h w -> (b t) c h w') # for independently extract frame feature
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
@@ -291,8 +295,12 @@ class VisionTransformer(nn.Module):
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x, t_x)
         x = x.permute(1, 0, 2)  # LND -> NLD
+        
+        x = rearrange(x, '(b t) n d -> b t n d', t = t)
 
-        x = self.ln_post(x[:, 0, :])
+        x = self.ln_post(x[:, :, 0, :])
+        
+        x = x.mean(dim=1)
 
         return x
 
