@@ -189,7 +189,7 @@ class QuickGELU(nn.Module):
     
     
 class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여기에 cross s2t_attn layer가 추가되어야 한다.
-    def __init__(self, dim: int, n_head: int, attn_mask: torch.Tensor = None):
+    def __init__(self, dim: int, n_head: int, num_frames, attn_mask: torch.Tensor = None):
         super().__init__()
 
         # add for cross-attn
@@ -197,6 +197,7 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         head_dim = dim // self.num_head
         self.scale = head_dim ** -0.5
         all_head_dim = head_dim * self.num_head
+        self.num_frames = num_frames
         
         #여기에 cross attn t2s module이 들어가야 한다.
         self.t2s_q = nn.Linear(dim, all_head_dim, bias=False)
@@ -212,9 +213,9 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
     
     def t2s_cross_attn(self, s_x, t_x):
         s_x = rearrange(s_x, 'p b c -> b p c')
-        s_x = rearrange(s_x, '(b t) p d -> b (t p) d', b=10)
-        B, s_N, C = s_x.shape
-        _, t_N, C = t_x.shape
+        B, t_N, C = t_x.shape
+        s_x = rearrange(s_x, '(b t) p d -> b (t p) d', b=B)
+        _, s_N, C = s_x.shape
         t2s_q_bias = self.t2s_q_bias
         t2s_kv_bias = torch.cat((torch.zeros_like(self.t2s_kv_bias, requires_grad=False), self.t2s_kv_bias))
         
@@ -231,7 +232,7 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         
         s_x = (t2s_attn @ t2s_v).transpose(1, 2).reshape(B, s_N, -1)
         s_x = self.t2s_proj(s_x)
-        s_x = rearrange(s_x, 'b (t p) d -> (b t) p d', t =16)
+        s_x = rearrange(s_x, 'b (t p) d -> (b t) p d', t =self.num_frames)
         s_x = rearrange(s_x, 'b s c -> s b c')
         
         return s_x
@@ -241,12 +242,12 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
 
 
 class ResidualAttentionBlock(nn.Module):
-    def __init__(self, d_model: int, n_head: int, drop_path_rate, attn_mask: torch.Tensor = None):
+    def __init__(self, d_model: int, n_head: int, drop_path_rate, num_frames, attn_mask: torch.Tensor = None):
         super().__init__()
 
         self.attn = nn.MultiheadAttention(d_model, n_head)
         self.ln_1 = LayerNorm(d_model)
-        self.t2s = CrossAttentionT2S(d_model, n_head)
+        self.t2s = CrossAttentionT2S(d_model, n_head, num_frames)
         self.ln_t2s = LayerNorm(d_model)
         self.mlp = nn.Sequential(OrderedDict([
             ("c_fc", nn.Linear(d_model, d_model * 4)),
@@ -269,13 +270,13 @@ class ResidualAttentionBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, width: int, layers: int, heads: int, drop_path_rate, attn_mask: torch.Tensor = None):
+    def __init__(self, width: int, layers: int, heads: int, drop_path_rate, num_frames, attn_mask: torch.Tensor = None):
         super().__init__()
         self.width = width
         self.layers = layers
         self.drop_path_rate = drop_path_rate
         dpr = [x.item() for x in torch.linspace(0, self.drop_path_rate, self.layers)]
-        self.resblocks = nn.ModuleList([ResidualAttentionBlock(width, heads, dpr[i], attn_mask) for i in range(layers)])
+        self.resblocks = nn.ModuleList([ResidualAttentionBlock(width, heads, dpr[i], num_frames,attn_mask) for i in range(layers)])
 
     def forward(self, x: torch.Tensor, t_x: torch.Tensor):
         for blk in self.resblocks:
@@ -284,7 +285,7 @@ class Transformer(nn.Module):
 
 
 class VisionTransformer(nn.Module):
-    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, drop_path_rate: float):
+    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, drop_path_rate: float, num_frames: int):
         super().__init__()
         self.input_resolution = input_resolution
         self.conv1 = nn.Conv2d(in_channels=3, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
@@ -294,7 +295,7 @@ class VisionTransformer(nn.Module):
         self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) ** 2 + 1, width))
         self.ln_pre = LayerNorm(width)
 
-        self.transformer = Transformer(width, layers, heads, drop_path_rate)
+        self.transformer = Transformer(width, layers, heads, drop_path_rate, num_frames)
 
         self.ln_post = LayerNorm(width)
         
@@ -331,20 +332,24 @@ class CLIP(nn.Module):
                  vision_width: int,
                  vision_patch_size: int,
                  num_classes,
-                 drop_path
+                 drop_path,
+                 num_frames
                  ):
         super().__init__()
 
         vision_heads = vision_width // 64
         self.layers = vision_layers
         self.drop_path_rate = drop_path
+        self.num_frames = num_frames
         self.visual = VisionTransformer(
             input_resolution=image_resolution,
             patch_size=vision_patch_size,
             width=vision_width,
             layers=vision_layers,
             heads=vision_heads,
-            drop_path_rate=self.drop_path_rate)
+            drop_path_rate=self.drop_path_rate,
+            num_frames = self.num_frames
+            )
         
         
         self.head = nn.Linear(vision_width, num_classes) # 수동으로 class 수 맞춰줘야함 load엑서 변수가 통제되어있음
@@ -421,12 +426,13 @@ def build_model(state_dict: dict, args):
     vision_patch_size = state_dict["visual.conv1.weight"].shape[-1]
     grid_size = round((state_dict["visual.positional_embedding"].shape[0] - 1) ** 0.5)
     image_resolution = vision_patch_size * grid_size
+    num_frames = args.num_frames
     num_classes = args.nb_classes
     drop_path = args.drop_path
 
 
     model = CLIP(
-        image_resolution, vision_layers, vision_width, vision_patch_size, num_classes, drop_path
+        image_resolution, vision_layers, vision_width, vision_patch_size, num_classes, drop_path, num_frames
     )
 
     for key in ["input_resolution", "context_length", "vocab_size"]:

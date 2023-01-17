@@ -26,6 +26,7 @@
                     "--batch_size", "10",
                     "--num_sample", "1",
                     "--epochs", "10",
+                    "--drop_path", "0.1",
                     "--save_ckpt_freq", "1",
                     "--input_size", "224",
                     "--short_side_size", "224",
