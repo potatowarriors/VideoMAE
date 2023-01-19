@@ -20,7 +20,7 @@ from optim_factory import create_optimizer, get_parameter_groups, LayerDecayValu
 from datasets import build_dataset
 from engine_for_crossattn import train_one_epoch, validation_one_epoch, final_test, merge
 from utils import NativeScalerWithGradNormCount as NativeScaler, laod_pretrained_weight, change_verification_mode, freeze_stlayers
-from utils import cross_multiple_samples_collate
+from utils import cross_multiple_samples_collate, notice_message
 import utils
 import clip_base.clip as clip
 import modeling_finetune
@@ -188,6 +188,8 @@ def get_args():
 
     parser.add_argument('--enable_deepspeed', action='store_true', default=False)
     parser.add_argument('--freeze_layers', action='store_true', default=False)
+    
+    parser.add_argument('--slack_api', type=str, default = None)
 
     known_args, _ = parser.parse_known_args()
 
@@ -312,7 +314,7 @@ def main(args, ds_init):
         drop_path_rate=args.drop_path,
         attn_drop_rate=args.attn_drop_rate,
         drop_block_rate=None,
-        use_mean_pooling=False,
+        use_mean_pooling=True,
         init_scale=args.init_scale,
     )
 
@@ -500,6 +502,21 @@ def main(args, ds_init):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
+    if args.slack_api is not None:
+        if global_rank == 0 and args.slack_api:
+            Token = args.slack_api # 자신의 Token 입력
+            job_name=os.environ["SLURM_JOB_NAME"]
+            cluster=os.environ["SLURM_SUBMIT_HOST"]
+            job_time=total_time_str
+            attach_dict = {
+            'color' : '#ff0000',
+            'author_name' : 'Job Finish',
+            'title' : job_name,
+            'text' : cluster,
+            }
+            attach_list=[attach_dict] 
+            contents=f"Training time is {job_time}\nFreeze Layer: {args.freeze_block_names}\nTop 1 Accuracy is {final_top1}"
+            notice_message(Token, "#notice-job", contents, attach_list)
 
 
 if __name__ == '__main__':
