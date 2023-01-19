@@ -102,27 +102,16 @@ class ReduceTemporalLayer(nn.Module):
         self.patch_num = img_size // patch_size
         self.chans = in_chans
         self.batch_size = batch_size
-        self.reduce = nn.Conv3d(in_channels=in_chans, out_channels=embed_dim,
-                                kernel_size=(tubelet_size, patch_size, patch_size),
-                                stride=(tubelet_size, patch_size, patch_size))
+        self.reduce = nn.Conv1d(embed_dim, embed_dim, kernel_size=2, stride=2, groups=embed_dim)
+        
     def forward(self, x):
         t = x.shape[1] // self.batch_size
         x = rearrange(x, 'n (b t) d -> b t n d', t=t)
-        cls_temp = x[:, :, 0, :]
-        x_temp = x[:,:,1:,:]
-        
-        # normal patch token pass to conv layer
-        x_temp = rearrange(x_temp, 'b t (h1 w1) (c h2 w2) -> b c t (h1 h2) (w1 w2)', c=self.chans, h1=self.patch_num, h2=self.patch_size)
-        x_temp = self.reduce(x_temp)
-        x_temp = rearrange(x_temp, 'b d t n1 n2 -> (n1 n2) (b t) d')
-        
-        # cls token pass to conv layer // cls token을 통과 시킬지 말지는 실험을 통해서 결정해보자. 안시키는게 좋을거같기도 하고.....
-        cls_temp = rearrange(cls_temp, 'b t (c h1 w1) -> b c t h1 w1' ,c=self.chans, h1=self.patch_size)
-        cls_temp = self.reduce(cls_temp).squeeze()
-        if len(cls_temp.shape) == 2:
-            cls_temp = cls_temp.unsqueeze(dim=2)
-        cls_temp = rearrange(cls_temp, 'b d t -> (b t) d').unsqueeze(dim=0)
-        x = torch.cat([cls_temp, x_temp], dim=0)
+        B, T, N, D = x.size()
+        x = x.permute(0, 2, 3, 1).contiguous().flatten(0, 1) # B * T, N, D
+        x = self.reduce(x)
+        x = x.view(B, N, D, -1).permute(0, 3, 1, 2).contiguous() # B, T, N, D
+        x = rearrange(x, 'B T N D -> N (B T) D')
         
         return x
 
@@ -262,6 +251,11 @@ class CLIP(nn.Module):
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv1d):
+            nn.init.xavier_uniform_(m.weight)
+            if isinstance(m, nn.Conv1d) and m.bias is not None:
+                nn.init.normal_(m.bias, std=1e-6)
+            
 
     def build_attention_mask(self):
         # lazily create causal attention mask, with full attention between the vision tokens
