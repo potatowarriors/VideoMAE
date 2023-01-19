@@ -12,7 +12,7 @@
                "module": "torch.distributed.launch",
                "justMyCode": true,
                "args" : [
-                    "--nproc_per_node", "1",
+                    "--nproc_per_node", "2",
                     "--master_port", "12340",
                     "/data/kide004/repos/VideoMAE/run_cross_finetuning.py",
                     "--model", "vit_base_patch16_224",

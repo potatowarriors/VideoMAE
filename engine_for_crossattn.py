@@ -10,8 +10,8 @@ import utils
 from scipy.special import softmax
 from einops import rearrange
 
-def cross_train_class_batch(model,samples , t_x, target, criterion):
-    outputs = model(samples, t_x)
+def cross_train_class_batch(model,samples, target, criterion):
+    outputs = model(samples)
     loss = criterion(outputs, target)
     return loss, outputs
 
@@ -61,17 +61,14 @@ def train_one_epoch(model: torch.nn.Module, temporal_model : torch.nn.Module, cr
             samples, targets = mixup_fn(samples, targets)
 
         samples = samples.half()
-        with torch.no_grad():
-            with torch.cuda.amp.autocast():
-                t_x = temporal_model(samples)
         
         if loss_scaler is None:
             loss, output = cross_train_class_batch(
-                model, samples, t_x, targets, criterion)
+                model, samples, targets, criterion)
         else:
             with torch.cuda.amp.autocast():
                 loss, output = cross_train_class_batch(
-                    model, samples ,samples, targets, criterion)
+                    model, samples, targets, criterion)
         loss_value = loss.item()
         #make_dot(loss, params=dict(model.named_parameters())).render(f'graph_ver2', format='png')        
 
@@ -163,11 +160,9 @@ def validation_one_epoch(data_loader, model, temporal_model, device):
         samples = samples.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
         
-        with torch.no_grad():
-            t_x = temporal_model(samples)
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(samples, t_x)
+            output = model(samples)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -205,13 +200,10 @@ def final_test(data_loader, model, temporal_model, device, file):
         batch_size = samples.shape[0]
         samples = samples.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
-        
-        with torch.no_grad():
-            t_x = temporal_model(samples)
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(samples, t_x)
+            output = model(samples)
             loss = criterion(output, target)
 
         for i in range(output.size(0)):
