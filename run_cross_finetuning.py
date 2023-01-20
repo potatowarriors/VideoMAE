@@ -19,11 +19,11 @@ from util_tools.optim_factory import create_optimizer, get_parameter_groups, Lay
 
 from dataset.datasets import build_dataset
 from engine_for_crossattn import train_one_epoch, validation_one_epoch, final_test, merge
-from util_tools import NativeScalerWithGradNormCount as NativeScaler, laod_pretrained_weight, change_verification_mode, freeze_stlayers
-from util_tools import cross_multiple_samples_collate
+from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, laod_pretrained_weight, change_verification_mode, freeze_stlayers
+from util_tools.utils import cross_multiple_samples_collate
 import util_tools.utils as utils
-import clip_models.t2s_clip as clip
-import videomae_models.modeling_finetune
+import clip_models.clip as clip
+import videomae_models.t2s_fintune
 
 
 def get_args():
@@ -34,8 +34,9 @@ def get_args():
     parser.add_argument('--save_ckpt_freq', default=100, type=int)
 
     # Model parameters
-    parser.add_argument('--model', default='vit_base_patch16_224', type=str, metavar='MODEL',
+    parser.add_argument('--vmae_model', default='vit_base_patch16_224', type=str, metavar='MODEL',
                         help='Name of model to train')
+    parser.add_argument('--clip_model', default='clip', choices=['clip', 't2s','conv'], type=str, help='pick clip version')
     parser.add_argument('--tubelet_size', type=int, default= 2)
     parser.add_argument('--input_size', default=224, type=int,
                         help='videos input size')
@@ -126,7 +127,7 @@ def get_args():
                         help='How to apply mixup/cutmix params. Per "batch", "pair", or "elem"')
 
     # Finetuning params
-    parser.add_argument('--finetune', default='', help='finetune from checkpoint')
+    parser.add_argument('--vmae_finetune', default='', help='finetune from checkpoint')
     parser.add_argument('--clip_finetune',default='', help='finetune from clip checkpoint')
     parser.add_argument('--model_key', default='model|module', type=str)
     parser.add_argument('--model_prefix', default='', type=str)
@@ -303,7 +304,7 @@ def main(args, ds_init):
             label_smoothing=args.smoothing, num_classes=args.nb_classes)
 
     temporal_model = create_model(
-        args.model,
+        args.vmae_model,
         pretrained=False,
         num_classes=args.nb_classes,
         all_frames=args.num_frames * args.num_segments,
@@ -322,11 +323,11 @@ def main(args, ds_init):
     args.patch_size = patch_size
     
 
-    if args.finetune:
-        laod_pretrained_weight(temporal_model, args.finetune, args)
+    if args.vmae_finetune:
+        laod_pretrained_weight(temporal_model, args.vmae_finetune, args)
                 
     temporal_model.to(device)
-    model, _ = clip.load(args, '/data/kide004/repos/VideoMAE/pre-trained/ViT-B-16.pt',device='cuda')
+    model = clip.load(args.clip_finetune,args, device='cuda')
     
     
     model_ema = None

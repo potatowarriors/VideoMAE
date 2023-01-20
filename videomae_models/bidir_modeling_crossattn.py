@@ -8,7 +8,7 @@ from timm.models.layers import drop_path, to_2tuple, trunc_normal_
 from timm.models.registry import register_model
 from collections import OrderedDict
 from einops import rearrange
-import clip
+import clip_models.clip as clip
 
 
 def _cfg(url='', **kwargs):

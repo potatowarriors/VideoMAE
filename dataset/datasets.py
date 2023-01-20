@@ -1,9 +1,10 @@
 import os
 from torchvision import transforms
-from transforms import *
-from masking_generator import TubeMaskingGenerator
-from dataset.kinetics import VideoClsDataset, VideoMAE
-from dataset.ssv2 import SSVideoClsDataset
+from util_tools.transforms import *
+from util_tools.masking_generator import TubeMaskingGenerator
+from .kinetics import VideoClsDataset, VideoMAE
+from .ssv2 import SSVideoClsDataset
+from .epic import EpicVideoClsDataset
 
 
 class DataAugmentationForVideoMAE(object):
@@ -145,6 +146,36 @@ def build_dataset(is_train, test_mode, args):
                 new_width=320,
                 args=args)
         nb_classes = 87
+        
+    elif args.data_set == 'EPIC':
+        mode = None
+        anno_path = None
+        if is_train is True:
+            mode = 'train'
+            anno_path = os.path.join(args.anno_path, 'epic100_compo_train.csv')
+        elif test_mode is True:
+            mode = 'test'
+            anno_path = os.path.join(args.anno_path, 'epic100_compo_val.csv')
+        else:
+            mode = 'validation'
+            anno_path = os.path.join(args.anno_path, 'epic100_compo_val.csv')
+
+        dataset = EpicVideoClsDataset(
+            anno_path=anno_path,
+            data_path=args.data_path,
+            mode=mode,
+            clip_len=1,
+            num_segment=args.num_frames,
+            test_num_segment=args.test_num_segment,
+            test_num_crop=args.test_num_crop,
+            num_crop=1 if not test_mode else 3,
+            keep_aspect_ratio=True,
+            crop_size=args.input_size,
+            short_side_size=args.short_side_size,
+            new_height=256,
+            new_width=320,
+            args=args)
+        nb_classes = 300
 
     elif args.data_set == 'UCF101':
         mode = None

@@ -15,14 +15,17 @@
                     "--nproc_per_node", "1",
                     "--master_port", "12330",
                     "/data/kide004/repos/VideoMAE/run_cross_finetuning.py",
-                    "--model", "cross_vit_base_patch16_224",
-                    "--data_set", "SSV2",
-                    "--nb_classes", "174",
-                    "--data_path", "/data/kide004/repos/VideoMAE/dataset/ssv2",
-                    "--finetune", "/data/kide004/repos/VideoMAE/pre-trained/ssv2_pretrained.pth",
+                    "--vmae_model", "t2s_vit_base_patch16_224",
+                    "--clip_model", "t2s",
+                    "--data_set", "EPIC",
+                    "--nb_classes", "300",
+                    "--data_path", "/local_datasets/Epickitchens100_clips/videos",
+                    "--anno_path", "/data/kide004/repos/VideoMAE/dataset/epic",
+                    "--vmae_finetune", "/data/kide004/repos/VideoMAE/pre-trained/ssv2_pretrained.pth",
+                    "--clip_finetune", "/data/kide004/repos/VideoMAE/pre-trained/ViT-B-16.pt",
                     "--log_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
                     "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
-                    "--batch_size", "2",
+                    "--batch_size", "10",
                     "--num_sample", "1",
                     "--epochs", "10",
                     "--save_ckpt_freq", "1",
@@ -38,6 +41,7 @@
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
                     "--dist_eval",
+               ]
           }
      ]
 }
