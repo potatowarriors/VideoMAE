@@ -7,8 +7,8 @@ from PIL import Image
 from pathlib import Path
 from timm.models import create_model
 import utils
-import modeling_pretrain
-from datasets import DataAugmentationForVideoMAE
+import videomae_models.modeling_pretrain as modeling_pretrain
+from dataset.datasets import DataAugmentationForVideoMAE
 from torchvision.transforms import ToPILImage
 from einops import rearrange
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD

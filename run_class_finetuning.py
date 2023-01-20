@@ -10,18 +10,18 @@ from functools import partial
 from pathlib import Path
 from collections import OrderedDict
 
-from mixup import Mixup
+from util_tools.mixup import Mixup
 from timm.models import create_model
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from timm.utils import ModelEma
-from optim_factory import create_optimizer, get_parameter_groups, LayerDecayValueAssigner
+from util_tools.optim_factory import create_optimizer, get_parameter_groups, LayerDecayValueAssigner
 
-from datasets import build_dataset
+from dataset.datasets import build_dataset
 from engine_for_finetuning import train_one_epoch, validation_one_epoch, final_test, merge
-from utils import NativeScalerWithGradNormCount as NativeScaler
-from utils import  multiple_samples_collate
-import utils
-import modeling_finetune
+from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler
+from util_tools.utils import  multiple_samples_collate
+from util_tools.utils import utils
+import videomae_models.modeling_finetune
 
 
 def get_args():
