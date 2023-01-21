@@ -94,19 +94,20 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         return self.t2s_cross_attn(s_x, t_x)
     
 class ReduceTemporalLayer(nn.Module):
-    def __init__(self, batch_size, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=2):
+    def __init__(self, current_frame, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=2):
         super().__init__()
         self.num_frames = num_frames
         self.img_size = img_size
         self.patch_size = patch_size
         self.patch_num = img_size // patch_size
         self.chans = in_chans
-        self.batch_size = batch_size
+        self.current_frame = current_frame
         self.reduce = nn.Conv1d(embed_dim, embed_dim, kernel_size=tubelet_size, stride=2, groups=embed_dim)
         
     def forward(self, x):
-        t = x.shape[1] // self.batch_size
-        x = rearrange(x, 'n (b t) d -> b t n d', t=t)
+        t = self.current_frame # reduce된 frame수
+        b = x.shape[1] // t # frame 수 기준 batch size 계산
+        x = rearrange(x, 'n (b t) d -> b t n d', b=b)
         B, T, N, D = x.size()
         x = x.permute(0, 2, 3, 1).contiguous().flatten(0, 1) # B * T, N, D
         x = self.reduce(x)
@@ -124,7 +125,8 @@ class ResidualAttentionBlock(nn.Module):
         if self.layer_num == 0:
             self.reduce = nn.Identity()
         elif self.layer_num % 3 == 0:
-            self.reduce = ReduceTemporalLayer(batch_size)
+            current_frame = num_frames // (2**(self.layer_num//3 - 1))
+            self.reduce = ReduceTemporalLayer(current_frame)
         else:
             self.reduce = nn.Identity()
         self.attn = nn.MultiheadAttention(d_model, n_head)
@@ -177,7 +179,7 @@ class VisionTransformer(nn.Module):
         self.ln_pre = LayerNorm(width)
 
         self.transformer = Transformer(width, layers, heads, drop_path_rate, num_frames, batch_size)
-        self.reduce_post = ReduceTemporalLayer(batch_size)
+        self.reduce_post = ReduceTemporalLayer(current_frame=2)
 
         self.ln_post = LayerNorm(width)
         
