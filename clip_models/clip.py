@@ -29,7 +29,8 @@ def load(model_path, args, device: Union[str, torch.device] = "cuda" if torch.cu
         raise RuntimeError(f"Model {model_path} not found; check the model name")
     
     with open(weight_path, 'rb') as opened_file:
-        state_dict = torch.load(opened_file, map_location="cpu")
+        model = torch.jit.load(opened_file, map_location='cpu')
+        state_dict = None
         
     if args.clip_model == 't2s':
         from .t2s_clip_model import build_model

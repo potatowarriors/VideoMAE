@@ -102,7 +102,7 @@ class ReduceTemporalLayer(nn.Module):
         self.patch_num = img_size // patch_size
         self.chans = in_chans
         self.batch_size = batch_size
-        self.reduce = nn.Conv1d(embed_dim, embed_dim, kernel_size=2, stride=2, groups=embed_dim)
+        self.reduce = nn.Conv1d(embed_dim, embed_dim, kernel_size=tubelet_size, stride=2, groups=embed_dim)
         
     def forward(self, x):
         t = x.shape[1] // self.batch_size
@@ -184,7 +184,6 @@ class VisionTransformer(nn.Module):
         
 
     def forward(self, x: torch.Tensor):
-        b, t = x.shape[0], x.shape[2]
         x = rearrange(x, 'b c t h w -> (b t) c h w') # for independently extract frame feature
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
