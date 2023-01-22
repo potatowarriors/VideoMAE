@@ -93,6 +93,7 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
     def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
         return self.t2s_cross_attn(s_x, t_x)
     
+    
 class ReduceTemporalLayer(nn.Module):
     def __init__(self, current_frame, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=2):
         super().__init__()
@@ -122,11 +123,12 @@ class ResidualAttentionBlock(nn.Module):
         super().__init__()
 
         self.layer_num = layer_num
+        self.current_frame = None
         if self.layer_num == 0:
             self.reduce = nn.Identity()
         elif self.layer_num % 3 == 0:
-            current_frame = num_frames // (2**(self.layer_num//3 - 1))
-            self.reduce = ReduceTemporalLayer(current_frame)
+            self.current_frame = num_frames // (2**(self.layer_num//3 - 1))
+            self.reduce = ReduceTemporalLayer(self.current_frame)
         else:
             self.reduce = nn.Identity()
         self.attn = nn.MultiheadAttention(d_model, n_head)
@@ -145,7 +147,12 @@ class ResidualAttentionBlock(nn.Module):
         return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
     def forward(self, x):
-        x = self.reduce(x)
+        if self.current_frame is not None:
+            temp = rearrange(x,'N (B T) D -> B T N D', T=self.current_frame)
+            temp = rearrange(temp, 'B (e h) N D -> B e h N D', e=2)
+            temp = temp.mean(dim=1)
+            temp = rearrange(temp, 'B T N D -> N (B T) D')
+            x = temp + self.drop_path(self.reduce(x)) # P B*T D
         x = x + self.drop_path(self.attention(self.ln_1(x)))
         x = x + self.drop_path(self.mlp(self.ln_2(x)))
         return x

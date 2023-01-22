@@ -16,6 +16,7 @@ import torch.nn as nn
 import torch.distributed as dist
 from torch._six import inf
 import random
+import requests
 
 from tensorboardX import SummaryWriter
 
