@@ -95,7 +95,7 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
     
     
 class ReduceTemporalLayer(nn.Module):
-    def __init__(self, current_frame, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=2):
+    def __init__(self, current_frame, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=4):
         super().__init__()
         self.num_frames = num_frames
         self.img_size = img_size
@@ -103,17 +103,22 @@ class ReduceTemporalLayer(nn.Module):
         self.patch_num = img_size // patch_size
         self.chans = in_chans
         self.current_frame = current_frame
-        self.reduce = nn.Conv1d(embed_dim, embed_dim, kernel_size=tubelet_size, stride=2, groups=embed_dim)
+        self.act = QuickGELU()
+        self.downample = nn.Linear(embed_dim, embed_dim//2)
+        self.reduce = nn.Conv1d(embed_dim//2, embed_dim//2, kernel_size=tubelet_size, stride=2, padding=1, groups=embed_dim//2)
+        self.upsample = nn.Linear(embed_dim//2, embed_dim)
         
     def forward(self, x):
-        t = self.current_frame # reduce된 frame수
-        b = x.shape[1] // t # frame 수 기준 batch size 계산
+        b = x.shape[1] // self.current_frame # frame 수 기준 batch size 계산
+        x = self.downample(x)
         x = rearrange(x, 'n (b t) d -> b t n d', b=b)
         B, T, N, D = x.size()
         x = x.permute(0, 2, 3, 1).contiguous().flatten(0, 1) # B * T, N, D
         x = self.reduce(x)
         x = x.view(B, N, D, -1).permute(0, 3, 1, 2).contiguous() # B, T, N, D
         x = rearrange(x, 'B T N D -> N (B T) D')
+        x = self.upsample(self.act(x))
+        
         
         return x
 
@@ -125,12 +130,12 @@ class ResidualAttentionBlock(nn.Module):
         self.layer_num = layer_num
         self.current_frame = None
         if self.layer_num == 0:
-            self.reduce = nn.Identity()
+            self.reduce = None
         elif self.layer_num % 3 == 0:
             self.current_frame = num_frames // (2**(self.layer_num//3 - 1))
             self.reduce = ReduceTemporalLayer(self.current_frame)
         else:
-            self.reduce = nn.Identity()
+            self.reduce = None
         self.attn = nn.MultiheadAttention(d_model, n_head)
         self.ln_1 = LayerNorm(d_model)
         self.mlp = nn.Sequential(OrderedDict([
@@ -148,11 +153,12 @@ class ResidualAttentionBlock(nn.Module):
 
     def forward(self, x):
         if self.current_frame is not None:
-            temp = rearrange(x,'N (B T) D -> B T N D', T=self.current_frame)
-            temp = rearrange(temp, 'B (e h) N D -> B e h N D', e=2)
-            temp = temp.mean(dim=1)
-            temp = rearrange(temp, 'B T N D -> N (B T) D')
-            x = temp + self.drop_path(self.reduce(x)) # P B*T D
+            # temp = rearrange(x,'N (B T) D -> B T N D', T=self.current_frame)
+            # temp = rearrange(temp, 'B (e h) N D -> B e h N D', e=2)
+            # temp = temp.mean(dim=1)
+            # temp = rearrange(temp, 'B T N D -> N (B T) D')
+            # x = temp + self.drop_path(self.reduce(x)) # P B*T D
+            x = self.reduce(x)
         x = x + self.drop_path(self.attention(self.ln_1(x)))
         x = x + self.drop_path(self.mlp(self.ln_2(x)))
         return x

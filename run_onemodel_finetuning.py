@@ -19,7 +19,7 @@ from util_tools.optim_factory import create_optimizer, get_parameter_groups, Lay
 
 from dataset.datasets import build_dataset
 from engine_for_onemodel import train_one_epoch, validation_one_epoch, final_test, merge
-from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, laod_pretrained_weight, change_verification_mode, freeze_stlayers
+from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, laod_pretrained_weight, freeze_block
 from util_tools.utils import cross_multiple_samples_collate, notice_message
 import util_tools.utils as utils
 import clip_models.clip as clip
@@ -310,7 +310,8 @@ def main(args, ds_init):
     args.window_size = 16
     args.patch_size = patch_size
     
-    model = clip.load(args.clip_finetune,args, device='cuda')
+    model = clip.load(args.clip_finetune, args, device='cuda')
+    model, freeze_list = freeze_block(model, ['attn','ln_1','mlp','ln_2'])
     
     
     model_ema = None

@@ -619,19 +619,17 @@ def cross_multiple_samples_collate(batch, fold=False):
     else:
         return s_inputs, t_inputs, labels, video_idx, extra_data
     
-def freeze_stlayers(model):
-    block_list = ['s2t','t2s','vmae', 'head']
-    temp_list = []
+def freeze_block(model,block_list):
+    freeze_list = []
     for name, param in model.named_parameters():
-        for block in block_list:
+        for block in block_list:#if block in block_list
             if block in name:
-                param.requires_grad = True
-                temp_list.append(name)
+                param.requires_grad = False
+                freeze_list.append(name)
                 break
             else:
-                param.requires_grad = False
-    print(temp_list)
-    return model
+                param.requires_grad = True
+    return model, freeze_list
                 
 def change_verification_mode(model, nb_classes):
     # freeze all parameters
