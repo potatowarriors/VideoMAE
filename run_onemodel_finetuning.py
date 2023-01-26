@@ -19,11 +19,12 @@ from util_tools.optim_factory import create_optimizer, get_parameter_groups, Lay
 
 from dataset.datasets import build_dataset
 from engine_for_onemodel import train_one_epoch, validation_one_epoch, final_test, merge
-from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, laod_pretrained_weight, freeze_block
+from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, laod_vmae_weights, load_clip_weights, freeze_block
 from util_tools.utils import cross_multiple_samples_collate, notice_message
 import util_tools.utils as utils
 import clip_models.clip as clip
 import videomae_models.t2s_fintune
+from clip_models.conv_clip_model import CLIP
 
 
 def get_args():
@@ -150,6 +151,7 @@ def get_args():
     parser.add_argument('--sampling_rate', type=int, default= 4)
     parser.add_argument('--data_set', default='Kinetics-400', choices=['Kinetics-400', 'SSV2','MINI_SSV2', 'UCF101', 'HMDB51','image_folder', 'EPIC'],
                         type=str, help='dataset')
+    parser.add_argument('--pred_type', default=None, choices=['noun', 'verb', 'action'])
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
     parser.add_argument('--log_dir', default=None,
@@ -310,8 +312,21 @@ def main(args, ds_init):
     args.window_size = 16
     args.patch_size = patch_size
     
-    model = clip.load(args.clip_finetune, args, device='cuda')
-    model, freeze_list = freeze_block(model, ['attn','ln_1','mlp','ln_2'])
+    model = CLIP(image_resolution=224,
+                 num_layers=12,
+                 feature_dim=768,
+                 patch_size=16,
+                 num_classes=args.nb_classes,
+                 drop_path=args.drop_path,
+                 num_frames=args.num_frames,
+                 batch_size=args.batch_size)
+    
+    load_clip_weights(model, args.clip_finetune)
+    # model, freeze_list = freeze_block(model, ['patch_embed', 'ln_pre', 'norm1', 'attn', 'norm2', 'mlp'])
+    # print('freeze list:',freeze_list)
+    
+    
+    
     
     
     model_ema = None
@@ -498,7 +513,7 @@ def main(args, ds_init):
             'text' : cluster,
             }
             attach_list=[attach_dict] 
-            contents=f"Training time is {job_time}\nFreeze Layer: {args.freeze_block_names}\nTop 1 Accuracy is {final_top1}"
+            contents=f"Training time is {job_time}\n Top 1 Accuracy is {final_top1}"
             notice_message(Token, "#notice-job", contents, attach_list)
     
 

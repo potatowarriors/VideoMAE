@@ -1,228 +1,268 @@
 from collections import OrderedDict
-from typing import Tuple, Union
-
 import numpy as np
+from typing import Tuple
+
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from torch import nn
-from einops import rearrange
 from timm.models.layers import drop_path, trunc_normal_
+from einops import rearrange
 
 
 
 
-class DropPath(nn.Module):
-    """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
-    """
-    def __init__(self, drop_prob=None):
-        super(DropPath, self).__init__()
-        self.drop_prob = drop_prob
-
-    def forward(self, x):
-        return drop_path(x, self.drop_prob, self.training)
+def split_cls(tensor, current_frame):
+    cls_tok, pat_tok = tensor[:, :1, :], tensor[:, 1:, :]
+    return cls_tok, pat_tok
     
-    def extra_repr(self) -> str:
-        return 'p={}'.format(self.drop_prob)
+class QuickGELU(nn.Module):
+    def forward(self, x: torch.Tensor):
+        return x * torch.sigmoid(1.702 * x)
 
 class LayerNorm(nn.LayerNorm):
     """Subclass torch's LayerNorm to handle fp16."""
 
     def forward(self, x: torch.Tensor):
         orig_type = x.dtype
-        if orig_type == torch.float16:
-            ret = super().forward(x)
-        elif orig_type == torch.float32:
-            ret = super().forward(x.type(torch.float32))
+        ret = super().forward(x.type(torch.float32))
         return ret.type(orig_type)
 
+class PatchEmbed2D(nn.Module):
 
-class QuickGELU(nn.Module):
-    def forward(self, x: torch.Tensor):
-        return x * torch.sigmoid(1.702 * x)
-    
-    
-class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여기에 cross s2t_attn layer가 추가되어야 한다.
-    def __init__(self, dim: int, n_head: int, num_frames, attn_mask: torch.Tensor = None):
+    def __init__(
+        self,
+        patch_size: Tuple[int, int] = (16, 16),
+        in_channels: int = 3,
+        embed_dim: int = 768,
+    ):
         super().__init__()
 
-        # add for cross-attn
-        self.num_head = n_head
-        head_dim = dim // self.num_head
-        self.scale = head_dim ** -0.5
-        all_head_dim = head_dim * self.num_head
-        self.num_frames = num_frames
-        
-        #여기에 cross attn t2s module이 들어가야 한다.
-        self.t2s_q = nn.Linear(dim, all_head_dim, bias=False)
-        self.t2s_q_bias = nn.Parameter(torch.zeros(dim))
-        
-        self.t2s_kv = nn.Linear(dim, all_head_dim * 2, bias=False)
-        self.t2s_kv_bias = nn.Parameter(torch.zeros(dim))
-        
-        self.t2s_proj = nn.Linear(all_head_dim, dim)
-        # 여기에 drop out 할지 말지는 고민좀 해보자.
-        
-        self.attn_mask = attn_mask
-    
-    def t2s_cross_attn(self, s_x, t_x):
-        s_x = rearrange(s_x, 'p b c -> b p c')
-        B, t_N, C = t_x.shape
-        s_x = rearrange(s_x, '(b t) p d -> b (t p) d', b=B)
-        _, s_N, C = s_x.shape
-        t2s_q_bias = self.t2s_q_bias
-        t2s_kv_bias = torch.cat((torch.zeros_like(self.t2s_kv_bias, requires_grad=False), self.t2s_kv_bias))
-        
-        t2s_q = F.linear(input=s_x, weight=self.t2s_q.weight, bias=t2s_q_bias)
-        t2s_q = t2s_q.reshape(B, s_N, self.num_head, -1).permute(0, 2, 1, 3)
-        t2s_kv = F.linear(input=t_x.half(), weight=self.t2s_kv.weight, bias=t2s_kv_bias)
-        t2s_kv = t2s_kv.reshape(B, t_N, 2, self.num_head, -1).permute(2, 0, 3, 1, 4)
-        t2s_q, t2s_k, t2s_v = t2s_q, t2s_kv[0], t2s_kv[1]
-        
-        t2s_q = t2s_q * self.scale
-        t2s_attn = (t2s_q @ t2s_k.transpose(-2, -1))
-        
-        t2s_attn = t2s_attn.softmax(dim=-1)
-        
-        s_x = (t2s_attn @ t2s_v).transpose(1, 2).reshape(B, s_N, -1)
-        s_x = self.t2s_proj(s_x)
-        s_x = rearrange(s_x, 'b (t p) d -> (b t) p d', t =self.num_frames)
-        s_x = rearrange(s_x, 'b s c -> s b c')
-        
-        return s_x
-
-    def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
-        return self.t2s_cross_attn(s_x, t_x)
-    
-    
-class ReduceTemporalLayer(nn.Module):
-    def __init__(self, current_frame, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=4):
-        super().__init__()
-        self.num_frames = num_frames
-        self.img_size = img_size
         self.patch_size = patch_size
-        self.patch_num = img_size // patch_size
-        self.chans = in_chans
-        self.current_frame = current_frame
+        self.in_channels = in_channels
+
+        self.proj = nn.Linear(np.prod(patch_size) * in_channels, embed_dim, bias=False)
+
+
+    def _initialize_weights(self, x):
+        nn.init.kaiming_normal_(self.proj.weight, 0.)
+        nn.init.constant_(self.proj.bias, 0.)
+
+
+    def forward(self, x: torch.Tensor):
+        B, C, H, W = x.size()
+        pH, pW = self.patch_size
+
+        assert C == self.in_channels and H % pH == 0 and W % pW == 0
+
+        x = x.view(B, C, H // pH, pH, W // pW, pW).permute(0, 2, 4, 1, 3, 5).flatten(3).flatten(1, 2)
+        x = self.proj(x)
+        
+        return x
+
+class ReduceTemporalLayer(nn.Module):
+    def __init__(self, num_frame, embed_dim=768, tubelet_size=4):
+        super().__init__()
+        self.num_frame = num_frame
         self.act = QuickGELU()
         self.downample = nn.Linear(embed_dim, embed_dim//2)
-        self.reduce = nn.Conv1d(embed_dim//2, embed_dim//2, kernel_size=tubelet_size, stride=2, padding=1, groups=embed_dim//2)
+        self.reduce = nn.Conv1d(embed_dim//2, embed_dim//2, kernel_size=3, stride=1, padding=1, groups=embed_dim//2)
         self.upsample = nn.Linear(embed_dim//2, embed_dim)
         
     def forward(self, x):
-        b = x.shape[1] // self.current_frame # frame 수 기준 batch size 계산
-        x = self.downample(x)
-        x = rearrange(x, 'n (b t) d -> b t n d', b=b)
-        B, T, N, D = x.size()
-        x = x.permute(0, 2, 3, 1).contiguous().flatten(0, 1) # B * T, N, D
-        x = self.reduce(x)
-        x = x.view(B, N, D, -1).permute(0, 3, 1, 2).contiguous() # B, T, N, D
-        x = rearrange(x, 'B T N D -> N (B T) D')
-        x = self.upsample(self.act(x))
-        
-        
+        cls_tok, pat_tok = split_cls(x, self.num_frame)
+        _, n, _ = pat_tok.size()
+        pat_tok = self.downample(pat_tok)
+        pat_tok = rearrange(pat_tok, '(b t) n d -> (b n) d t', t=self.num_frame)
+        pat_tok = self.reduce(pat_tok)
+        pat_tok = rearrange(pat_tok, '(b n) d t -> (b t) n d', n = n)
+        pat_tok = self.upsample(self.act(pat_tok))
+        x = torch.cat((cls_tok, pat_tok), dim=1)
         return x
 
+class Attention(nn.Module):
+    '''
+    A generalized attention module with more flexibility.
+    '''
 
-class ResidualAttentionBlock(nn.Module):
-    def __init__(self, d_model: int, n_head: int, drop_path_rate, num_frames, layer_num, batch_size, attn_mask: torch.Tensor = None):
+    def __init__(
+        self, q_in_dim: int, k_in_dim: int, v_in_dim: int,
+        qk_proj_dim: int, v_proj_dim: int, num_heads: int, out_dim: int,
+    ):
         super().__init__()
 
+        self.q_proj = nn.Linear(q_in_dim, qk_proj_dim)
+        self.k_proj = nn.Linear(k_in_dim, qk_proj_dim)
+        self.v_proj = nn.Linear(v_in_dim, v_proj_dim)
+        self.out_proj = nn.Linear(v_proj_dim, out_dim)
+
+        self.num_heads = num_heads
+        assert qk_proj_dim % num_heads == 0 and v_proj_dim % num_heads == 0
+
+        self._initialize_weights()
+
+
+    def _initialize_weights(self):
+        for m in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
+            nn.init.xavier_uniform_(m.weight)
+            nn.init.constant_(m.bias, 0.)
+
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+        assert q.ndim == 3 and k.ndim == 3 and v.ndim == 3
+        N = q.size(0); assert k.size(0) == N and v.size(0) == N
+        Lq, Lkv = q.size(1), k.size(1); assert v.size(1) == Lkv
+
+        q, k, v = self.q_proj(q), self.k_proj(k), self.v_proj(v)
+        
+        H = self.num_heads
+        Cqk, Cv = q.size(-1) // H, v.size(-1) // H
+
+        q = q.view(N, Lq, H, Cqk)
+        k = k.view(N, Lkv, H, Cqk)
+        v = v.view(N, Lkv, H, Cv)
+
+        aff = torch.einsum('nqhc,nkhc->nqkh', q / (Cqk ** 0.5), k)
+        aff = aff.softmax(dim=-2)
+        mix = torch.einsum('nqlh,nlhc->nqhc', aff, v)
+
+        out = self.out_proj(mix.flatten(-2))
+
+        return out
+
+
+
+class TransformerEncoderLayer(nn.Module):
+
+    def __init__(
+        self,
+        frame_num,
+        layer_num,
+        in_feature_dim: int = 768,
+        qkv_dim: int = 768,
+        num_heads: int = 12,
+        mlp_factor: float = 4.0,
+        mlp_dropout: float = 0.0,
+        act: nn.Module = QuickGELU,
+    ):
+        super().__init__()
+        
         self.layer_num = layer_num
         self.current_frame = None
-        if self.layer_num == 0:
-            self.reduce = None
-        elif self.layer_num % 3 == 0:
-            self.current_frame = num_frames // (2**(self.layer_num//3 - 1))
-            self.reduce = ReduceTemporalLayer(self.current_frame)
-        else:
-            self.reduce = None
-        self.attn = nn.MultiheadAttention(d_model, n_head)
-        self.ln_1 = LayerNorm(d_model)
+        self.reduce = ReduceTemporalLayer(frame_num)
+
+        self.norm1 = nn.LayerNorm(in_feature_dim)
+        self.attn = Attention(
+            q_in_dim=in_feature_dim, k_in_dim=in_feature_dim, v_in_dim=in_feature_dim,
+            qk_proj_dim=qkv_dim, v_proj_dim=qkv_dim, num_heads=num_heads, out_dim=in_feature_dim,
+        )
+
+        mlp_dim = round(mlp_factor * in_feature_dim)
+        self.norm2 = nn.LayerNorm(in_feature_dim)
         self.mlp = nn.Sequential(OrderedDict([
-            ("c_fc", nn.Linear(d_model, d_model * 4)),
-            ("gelu", QuickGELU()),
-            ("c_proj", nn.Linear(d_model * 4, d_model))
+            ('fc1', nn.Linear(in_feature_dim, mlp_dim)),
+            ('act', act()),
+            ('dropout', nn.Dropout(mlp_dropout)),
+            ('fc2', nn.Linear(mlp_dim, in_feature_dim)),
         ]))
-        self.ln_2 = LayerNorm(d_model)
-        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0. else nn.Identity()
-        self.attn_mask = attn_mask
 
-    def attention(self, x: torch.Tensor):
-        self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
-        return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
-    def forward(self, x):
-        if self.current_frame is not None:
-            # temp = rearrange(x,'N (B T) D -> B T N D', T=self.current_frame)
-            # temp = rearrange(temp, 'B (e h) N D -> B e h N D', e=2)
-            # temp = temp.mean(dim=1)
-            # temp = rearrange(temp, 'B T N D -> N (B T) D')
-            # x = temp + self.drop_path(self.reduce(x)) # P B*T D
-            x = self.reduce(x)
-        x = x + self.drop_path(self.attention(self.ln_1(x)))
-        x = x + self.drop_path(self.mlp(self.ln_2(x)))
+        self._initialize_weights()
+
+
+    def _initialize_weights(self):
+        for m in (self.mlp[0], self.mlp[-1]):
+            nn.init.xavier_uniform_(m.weight)
+            nn.init.normal_(m.bias, std=1e-6)
+
+
+    def forward(self, x: torch.Tensor):
+        x = x + self.reduce(x)
+        x_norm = self.norm1(x)
+        x = x + self.attn(x_norm, x_norm, x_norm)
+        x = x + self.mlp(self.norm2(x))
+
         return x
 
 
-class Transformer(nn.Module):
-    def __init__(self, width: int, layers: int, heads: int, drop_path_rate, num_frames, batch_size, attn_mask: torch.Tensor = None):
+class VisionTransformer2D(nn.Module):
+
+    def __init__(
+        self,
+        frame_num,
+        feature_dim: int = 768,
+        input_size: Tuple[int, int] = (224, 224),
+        patch_size: Tuple[int, int] = (16, 16),
+        num_heads: int = 12,
+        num_layers: int = 12,
+        mlp_factor: float = 4.0,
+        act: nn.Module = QuickGELU,
+        ln_pre: bool = True,
+    ):
         super().__init__()
-        self.width = width
-        self.layers = layers
-        self.drop_path_rate = drop_path_rate
-        dpr = [x.item() for x in torch.linspace(0, self.drop_path_rate, self.layers)]
-        self.resblocks = nn.ModuleList([ResidualAttentionBlock(width, heads, dpr[i], num_frames, i, batch_size, attn_mask) for i in range(layers)])
+        self.frame_num = frame_num
+
+        
+        self.patch_embed = PatchEmbed2D(patch_size=patch_size, embed_dim=feature_dim)
+        self.num_patches = np.prod([x // y for x, y in zip(input_size, patch_size)]) + 1
+
+        self.cls_token = nn.Parameter(torch.zeros([feature_dim]))
+        self.pos_embed = nn.Parameter(torch.zeros([self.num_patches, feature_dim]))
+        if ln_pre:
+            self.ln_pre = nn.LayerNorm(feature_dim)
+        else:
+            self.ln_pre = nn.Identity()
+
+        self.blocks = nn.ModuleList([
+            TransformerEncoderLayer(
+                frame_num, layer_num=i, in_feature_dim=feature_dim, qkv_dim=feature_dim, num_heads=num_heads, mlp_factor=mlp_factor, act=act,
+            ) for i in range(num_layers)
+        ])
+        
+        self.reduce_post = ReduceTemporalLayer(2)
+        
+        self.ln_post = nn.LayerNorm(feature_dim)
+
+        self._initialize_weights()
+
+
+    def _initialize_weights(self):
+        nn.init.normal_(self.cls_token, std=0.02)
+        nn.init.normal_(self.pos_embed, std=0.02)
+        
+    def get_num_layers(self):
+        return len(self.blocks)
+    
+    def no_weight_decay(self):
+        return {'pos_embed', 'cls_token'}
 
     def forward(self, x: torch.Tensor):
-        for blk in self.resblocks:
-            x = blk(x)
-        return x
-
-
-class VisionTransformer(nn.Module):
-    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, drop_path_rate: float, num_frames: int, batch_size: int):
-        super().__init__()
-        self.layers = layers
-        self.input_resolution = input_resolution
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
-
-        scale = width ** -0.5
-        self.class_embedding = nn.Parameter(scale * torch.randn(width))
-        self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) ** 2 + 1, width))
-        self.ln_pre = LayerNorm(width)
-
-        self.transformer = Transformer(width, layers, heads, drop_path_rate, num_frames, batch_size)
-        self.reduce_post = ReduceTemporalLayer(current_frame=2)
-
-        self.ln_post = LayerNorm(width)
+        B, C, T, H, W = x.size()
+        x = rearrange(x, 'B C T H W -> (B T) C H W')
         
-        
+        dtype = self.patch_embed.proj.weight.dtype
+        x = x.to(dtype)
 
-    def forward(self, x: torch.Tensor):
-        x = rearrange(x, 'b c t h w -> (b t) c h w') # for independently extract frame feature
-        x = self.conv1(x)  # shape = [*, width, grid, grid]
-        x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
-        x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
-        x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
-        x = x + self.positional_embedding.to(x.dtype)
+        x = self.patch_embed(x)
+        x = torch.cat([self.cls_token.view(1, 1, -1).repeat(x.size(0), 1, 1), x], dim=1)
+        x = x + self.pos_embed
+
         x = self.ln_pre(x)
-
-        x = x.permute(1, 0, 2)  # NLD -> LND
-        x = self.transformer(x)
-        x = self.reduce_post(x)
-        x = x.permute(1, 0, 2)  # LND -> NLD
-
+        
+        for blk in self.blocks:
+            x = blk(x)
+        x = rearrange(x, '(b t) n d -> b t n d', t=self.frame_num)
+        x = x.mean(dim=1) #temporal mean pooling
+        
         x = self.ln_post(x[:, 0, :])
-
+        
         return x
-
 
 class CLIP(nn.Module):
     def __init__(self,
                  image_resolution: int,
-                 vision_layers: Union[Tuple[int, int, int, int], int],
-                 vision_width: int,
-                 vision_patch_size: int,
+                 num_layers: int,
+                 feature_dim: int,
+                 patch_size: int,
                  num_classes,
                  drop_path,
                  num_frames,
@@ -230,24 +270,24 @@ class CLIP(nn.Module):
                  ):
         super().__init__()
 
-        vision_heads = vision_width // 64
-        self.layers = vision_layers
+        self.layers = num_layers
         self.drop_path_rate = drop_path
         self.num_frames = num_frames
         self.batch_size = batch_size
-        self.visual = VisionTransformer(
-            input_resolution=image_resolution,
-            patch_size=vision_patch_size,
-            width=vision_width,
-            layers=vision_layers,
-            heads=vision_heads,
-            drop_path_rate=self.drop_path_rate,
-            num_frames = self.num_frames,
-            batch_size=self.batch_size
+        self.visual = VisionTransformer2D(
+            self.num_frames,
+            feature_dim=768,
+            input_size=(224,224),
+            patch_size=(16,16),
+            num_heads=12,
+            num_layers=12,
+            mlp_factor=4.0,
+            act=QuickGELU,
+            ln_pre=True
             )
         
         
-        self.head = nn.Linear(vision_width, num_classes)
+        self.head = nn.Linear(feature_dim, num_classes)
 
         self.apply(self.initialize_parameters)
         
@@ -269,15 +309,6 @@ class CLIP(nn.Module):
             nn.init.xavier_uniform_(m.weight)
             if isinstance(m, nn.Conv1d) and m.bias is not None:
                 nn.init.normal_(m.bias, std=1e-6)
-            
-
-    def build_attention_mask(self):
-        # lazily create causal attention mask, with full attention between the vision tokens
-        # pytorch uses additive attention mask; fill with -inf
-        mask = torch.empty(self.context_length, self.context_length)
-        mask.fill_(float("-inf"))
-        mask.triu_(1)  # zero out the lower diagonal
-        return mask
 
     @property
     def dtype(self):
@@ -291,53 +322,3 @@ class CLIP(nn.Module):
         x = self.head(x)
         
         return x
-
-
-def convert_weights(model: nn.Module):
-    """Convert applicable model parameters to fp16"""
-
-    def _convert_weights_to_fp16(l):
-        if isinstance(l, (nn.Conv1d, nn.Conv2d, nn.Linear)):
-            l.weight.data = l.weight.data.half()
-            if l.bias is not None:
-                l.bias.data = l.bias.data.half()
-
-        if isinstance(l, nn.MultiheadAttention):
-            for attr in [*[f"{s}_proj_weight" for s in ["in", "q", "k", "v"]], "in_proj_bias", "bias_k", "bias_v"]:
-                tensor = getattr(l, attr)
-                if tensor is not None:
-                    tensor.data = tensor.data.half()
-
-        for name in ["text_projection", "proj"]:
-            if hasattr(l, name):
-                attr = getattr(l, name)
-                if attr is not None:
-                    attr.data = attr.data.half()
-
-    model.apply(_convert_weights_to_fp16)
-
-
-def build_model(state_dict: dict, args):
-    
-    vision_width = state_dict["visual.conv1.weight"].shape[0]
-    vision_layers = len([k for k in state_dict.keys() if k.startswith("visual.") and k.endswith(".attn.in_proj_weight")])
-    vision_patch_size = state_dict["visual.conv1.weight"].shape[-1]
-    grid_size = round((state_dict["visual.positional_embedding"].shape[0] - 1) ** 0.5)
-    image_resolution = vision_patch_size * grid_size
-    num_frames = args.num_frames
-    num_classes = args.nb_classes
-    drop_path = args.drop_path
-    batch_size = args.batch_size
-
-
-    model = CLIP(
-        image_resolution, vision_layers, vision_width, vision_patch_size, num_classes, drop_path, num_frames, batch_size
-    )
-
-    for key in ["input_resolution", "context_length", "vocab_size"]:
-        if key in state_dict:
-            del state_dict[key]
-
-    convert_weights(model)
-    model.load_state_dict(state_dict, strict=False)
-    return model

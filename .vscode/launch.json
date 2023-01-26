@@ -18,6 +18,7 @@
                     "--vmae_model", "t2s_vit_base_patch16_224",
                     "--clip_model", "conv",
                     "--data_set", "EPIC",
+                    "--pred_type", "noun",
                     "--nb_classes", "300",
                     "--data_path", "/local_datasets/Epickitchens100_clips/videos",
                     "--anno_path", "/data/kide004/repos/VideoMAE/dataset/epic",
