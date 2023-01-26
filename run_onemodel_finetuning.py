@@ -24,7 +24,6 @@ from util_tools.utils import cross_multiple_samples_collate, notice_message
 import util_tools.utils as utils
 import clip_models.clip as clip
 import videomae_models.t2s_fintune
-from clip_models.conv_clip_model import CLIP
 
 
 def get_args():
@@ -38,6 +37,7 @@ def get_args():
     parser.add_argument('--vmae_model', default='vit_base_patch16_224', type=str, metavar='MODEL',
                         help='Name of model to train')
     parser.add_argument('--clip_model', default='clip', choices=['clip', 't2s','conv'], type=str, help='pick clip version')
+    parser.add_argument('--clip_frame', default=None, choices=['center', 'all'], type=str, help='pick clip frame number')
     parser.add_argument('--tubelet_size', type=int, default= 2)
     parser.add_argument('--input_size', default=224, type=int,
                         help='videos input size')
@@ -312,18 +312,9 @@ def main(args, ds_init):
     args.window_size = 16
     args.patch_size = patch_size
     
-    model = CLIP(image_resolution=224,
-                 num_layers=12,
-                 feature_dim=768,
-                 patch_size=16,
-                 num_classes=args.nb_classes,
-                 drop_path=args.drop_path,
-                 num_frames=args.num_frames,
-                 batch_size=args.batch_size)
     
-    load_clip_weights(model, args.clip_finetune)
-    # model, freeze_list = freeze_block(model, ['patch_embed', 'ln_pre', 'norm1', 'attn', 'norm2', 'mlp'])
-    # print('freeze list:',freeze_list)
+    model = clip.load(args.clip_finetune, args, device='cuda')
+    # model, freeze_list = freeze_block(model, ['attn','ln_1','mlp','ln_2'])
     
     
     
@@ -442,7 +433,7 @@ def main(args, ds_init):
         if log_writer is not None:
             log_writer.set_step(epoch * num_training_steps_per_epoch * args.update_freq)
         train_stats = train_one_epoch(
-            model, criterion, data_loader_train, optimizer,
+            args, model, criterion, data_loader_train, optimizer,
             device, epoch, loss_scaler, args.clip_grad, model_ema, mixup_fn,
             log_writer=log_writer, start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values,
@@ -454,7 +445,7 @@ def main(args, ds_init):
                     args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
                     loss_scaler=loss_scaler, epoch=epoch, model_ema=model_ema)
         if data_loader_val is not None:
-            test_stats = validation_one_epoch(data_loader_val, model, device)
+            test_stats = validation_one_epoch(args, data_loader_val, model, device)
             print(f"Accuracy of the network on the {len(dataset_val)} val videos: {test_stats['acc1']:.1f}%")
             if max_accuracy < test_stats["acc1"]:
                 max_accuracy = test_stats["acc1"]
@@ -484,7 +475,7 @@ def main(args, ds_init):
                 f.write(json.dumps(log_stats) + "\n")
 
     preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
-    test_stats = final_test(data_loader_test, model, device, preds_file)
+    test_stats = final_test(args, data_loader_test, model, device, preds_file)
     torch.distributed.barrier()
     if global_rank == 0:
         print("Start merging results...")

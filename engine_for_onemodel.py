@@ -21,7 +21,7 @@ def get_loss_scale_for_deepspeed(model):
     return optimizer.loss_scale if hasattr(optimizer, "loss_scale") else optimizer.cur_scale
 
 
-def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
+def train_one_epoch(args, model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None, log_writer=None,
@@ -59,15 +59,21 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         if mixup_fn is not None:
             samples, targets = mixup_fn(samples, targets)
         
+        if args.clip_frame == 'center':
+            input = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True)
+        elif args.clip_frame == 'all':
+            input = samples
+        
+        input = input.half()
+        
         if loss_scaler is None:
-            samples = samples.half()
             loss, output = cross_train_class_batch(
-                model, samples, targets, criterion)
+                model, input, targets, criterion)
         else:
             with torch.cuda.amp.autocast():
                 samples = samples.half()
                 loss, output = cross_train_class_batch(
-                    model, samples, targets, criterion)
+                    model, input, targets, criterion)
         loss_value = loss.item()
         #make_dot(loss, params=dict(model.named_parameters())).render(f'graph_ver2', format='png')        
 
@@ -142,7 +148,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
-def validation_one_epoch(data_loader, model, device):
+def validation_one_epoch(args, data_loader, model, device):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -157,10 +163,17 @@ def validation_one_epoch(data_loader, model, device):
         batch_size = samples.shape[0]
         samples = samples.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
+        
+        if  args.clip_frame == 'center':
+            input = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True)
+        elif args.clip_frame == 'all':
+            input = samples
+        
+        input = input.half()
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(samples)
+            output = model(input)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -178,7 +191,7 @@ def validation_one_epoch(data_loader, model, device):
 
 
 @torch.no_grad()
-def final_test(data_loader, model, device, file):
+def final_test(args, data_loader, model, device, file):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -197,10 +210,17 @@ def final_test(data_loader, model, device, file):
         batch_size = samples.shape[0]
         samples = samples.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
+        
+        if args.clip_frame == 'center':
+            input = samples[:, :, samples.shape[2] // 2, :, :].to(device, non_blocking=True)
+        elif args.clip_frame == 'all':
+            input = samples
+        
+        input = input.half()
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(samples)
+            output = model(input)
             loss = criterion(output, target)
 
         for i in range(output.size(0)):

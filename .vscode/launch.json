@@ -17,6 +17,7 @@
                     "/data/kide004/repos/VideoMAE/run_onemodel_finetuning.py",
                     "--vmae_model", "t2s_vit_base_patch16_224",
                     "--clip_model", "conv",
+                    "--clip_frame", "center",
                     "--data_set", "EPIC",
                     "--pred_type", "noun",
                     "--nb_classes", "300",
