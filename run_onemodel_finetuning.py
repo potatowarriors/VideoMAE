@@ -38,6 +38,7 @@ def get_args():
                         help='Name of model to train')
     parser.add_argument('--clip_model', default='clip', choices=['clip', 't2s','conv'], type=str, help='pick clip version')
     parser.add_argument('--clip_frame', default=None, choices=['center', 'all'], type=str, help='pick clip frame number')
+    parser.add_argument('--cls_split', default=False, type=bool, help='using cls token split')
     parser.add_argument('--tubelet_size', type=int, default= 2)
     parser.add_argument('--input_size', default=224, type=int,
                         help='videos input size')
