@@ -19,8 +19,8 @@ from util_tools.optim_factory import create_optimizer, get_parameter_groups, Lay
 from dataset.datasets import build_dataset
 from engine_for_finetuning import train_one_epoch, validation_one_epoch, final_test, merge
 from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler
-from util_tools.utils import  multiple_samples_collate
-from util_tools.utils import utils
+from util_tools.utils import  multiple_samples_collate, notice_message
+import util_tools.utils as utils
 import videomae_models.modeling_finetune
 
 
@@ -143,7 +143,7 @@ def get_args():
     parser.add_argument('--num_segments', type=int, default= 1)
     parser.add_argument('--num_frames', type=int, default= 16)
     parser.add_argument('--sampling_rate', type=int, default= 4)
-    parser.add_argument('--data_set', default='Kinetics-400', choices=['Kinetics-400', 'SSV2', 'UCF101', 'HMDB51','image_folder'],
+    parser.add_argument('--data_set', default='Kinetics-400', choices=['EGO4D_LTA','Kinetics-400', 'SSV2', 'UCF101', 'HMDB51','image_folder'],
                         type=str, help='dataset')
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
@@ -183,7 +183,17 @@ def get_args():
                         help='url used to set up distributed training')
 
     parser.add_argument('--enable_deepspeed', action='store_true', default=False)
-
+    parser.add_argument('--anno_path', default=None, type=str, help='annotation path')
+    parser.add_argument('--freeze_layers', default=None, nargs='+', type=str)
+    parser.add_argument('--slack_api', type=str,default=None)
+    parser.add_argument('--vmae_finetune', default='', help='finetune from checkpoint')
+    parser.add_argument('--clip_finetune',default='', help='finetune from clip checkpoint')
+    parser.add_argument('--vmae_model', default='vit_base_patch16_224', type=str, metavar='MODEL',
+                        help='Name of model to train')
+    parser.add_argument('--clip_model', default='clip', choices=['clip', 't2s','conv'], type=str, help='pick clip version')
+    parser.add_argument('--clip_frame', default=None, choices=['center', 'all'], type=str, help='pick clip frame number')
+    parser.add_argument('--cls_split', default=False, type=bool, help='using cls token split')
+    parser.add_argument('--pred_type', default=None, choices=['noun', 'verb', 'action'])
     known_args, _ = parser.parse_known_args()
 
     if known_args.enable_deepspeed:
@@ -549,7 +559,22 @@ def main(args, ds_init):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
-
+    if args.slack_api is not None:
+        if global_rank == 0 and args.slack_api:
+            Token = args.slack_api # 자신의 Token 입력
+            job_name=os.environ["SLURM_JOB_NAME"]
+            cluster=os.environ["SLURM_SUBMIT_HOST"]
+            job_time=total_time_str
+            attach_dict = {
+            'color' : '#ff0000',
+            'author_name' : 'Job Finish',
+            'title' : job_name,
+            'text' : cluster,
+            }
+            attach_list=[attach_dict] 
+            contents=f"Training time is {job_time}\nTop 1 Accuracy is {final_top1}"
+            notice_message(Token, "#notice-job", contents, attach_list)
+        
 
 if __name__ == '__main__':
     opts, ds_init = get_args()

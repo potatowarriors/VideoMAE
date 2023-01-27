@@ -5,6 +5,7 @@ from util_tools.masking_generator import TubeMaskingGenerator
 from .kinetics import VideoClsDataset, VideoMAE
 from .ssv2 import SSVideoClsDataset
 from .epic import EpicVideoClsDataset
+from .ego4d import EGO4DVideoClsDataset
 
 
 class DataAugmentationForVideoMAE(object):
@@ -181,7 +182,38 @@ def build_dataset(is_train, test_mode, args):
             nb_classes = 300
         elif args.pred_type == 'action':
             nb_classes = 29100
-
+    elif args.data_set == "EGO4D_LTA":
+        mode = None
+        anno_path = None
+        if is_train : 
+            mode = 'train'
+            anno_path = os.path.join(args.anno_path,'lta_train.csv')
+        elif test_mode:
+            mode = 'test'
+            anno_path = os.path.join(args.anno_path, 'lta_val.csv') #! Test is not annotated.
+        else:
+            mode = 'validation'
+            anno_path = os.path.join(args.anno_path, 'lta_val.csv')
+        dataset = None
+        dataset = EGO4DVideoClsDataset(
+            anno_path=anno_path,
+            data_path=args.data_path,
+            mode=mode,
+            clip_len=1,
+            num_segment=args.num_frames,
+            test_num_segment=args.test_num_segment,
+            test_num_crop=args.test_num_crop,
+            num_crop=1 if not test_mode else 3,
+            keep_aspect_ratio=True,
+            crop_size=args.input_size,
+            short_side_size=args.short_side_size,
+            new_height=256,
+            new_width=320,
+            args=args)
+        if args.pred_type == 'verb':
+            nb_classes = 115
+        elif args.pred_type == 'noun':
+            nb_classes = 478
     elif args.data_set == 'UCF101':
         mode = None
         anno_path = None
