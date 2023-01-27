@@ -66,7 +66,8 @@ class ReduceTemporalLayer(nn.Module):
         x = self.reduce(x)
         x = rearrange(x, '(b n) d t -> n (b t) d', n = self.patch_num)
         x = self.upsample(self.act(x))
-        x = torch.cat((cls_tok, x), dim = 0)
+        if self.cls_split:
+            x = torch.cat((cls_tok, x), dim = 0)
         
         return x
 

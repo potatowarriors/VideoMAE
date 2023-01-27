@@ -18,7 +18,7 @@
                     "--vmae_model", "t2s_vit_base_patch16_224",
                     "--clip_model", "conv",
                     "--clip_frame", "all",
-                    "--cls_split", "True",
+                    "--cls_split", "False",
                     "--data_set", "EPIC",
                     "--pred_type", "noun",
                     "--nb_classes", "300",
