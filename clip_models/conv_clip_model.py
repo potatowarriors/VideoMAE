@@ -120,12 +120,14 @@ class VisionTransformer(nn.Module):
         super().__init__()
         self.layers = layers
         self.input_resolution = input_resolution
+        self.embed_dim = width
         self.conv1 = nn.Conv2d(in_channels=3, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
 
         scale = width ** -0.5
         self.class_embedding = nn.Parameter(scale * torch.randn(width))
         self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) ** 2 + 1, width))
         self.ln_pre = LayerNorm(width)
+        self.temporal_posembed = nn.Parameter(torch.zeros([num_frames, width]))
 
         self.transformer = Transformer(width, layers, heads, drop_path_rate, num_frames, batch_size, cls_split)
 
@@ -136,6 +138,7 @@ class VisionTransformer(nn.Module):
     def forward(self, x: torch.Tensor):
         b = x.shape[0]
         if len(x.size()) == 5:
+            b, c, t, h, w = x.size()
             all_frame_setting = True
             x = rearrange(x, 'b c t h w -> (b t) c h w') # for independently extract frame feature
         x = self.conv1(x)  # shape = [*, width, grid, grid]
@@ -144,6 +147,10 @@ class VisionTransformer(nn.Module):
         x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
         x = x + self.positional_embedding.to(x.dtype)
         x = self.ln_pre(x)
+        if all_frame_setting:
+            x = rearrange(x, '(b t) n d -> b t n d', b=b)
+            x = x + self.temporal_posembed.to(x.dtype).view(1, t, 1, self.embed_dim)
+            x = rearrange(x, 'b t n d -> (b t) n d')
 
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
