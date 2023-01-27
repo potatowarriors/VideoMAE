@@ -94,9 +94,9 @@ class ResidualAttentionBlock(nn.Module):
         return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
     def forward(self, x):
-        x = x + self.reduce(x)
-        x = x + self.attention(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
+        x = x + self.drop_path(self.reduce(x))
+        x = x + self.drop_path(self.attention(self.ln_1(x)))
+        x = x + self.drop_path(self.mlp(self.ln_2(x)))
         return x
 
 
@@ -205,7 +205,7 @@ class CLIP(nn.Module):
         return self.layers
     
     def no_weight_decay(self):
-        return {}
+        return {'class_embedding', 'visual.positional_embedding', 'visual.temporal_posembed'}
 
     def initialize_parameters(self, m):
         if isinstance(m, nn.Linear):

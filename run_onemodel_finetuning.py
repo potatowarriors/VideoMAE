@@ -319,10 +319,6 @@ def main(args, ds_init):
         model, freeze_list = freeze_block(model, args.freeze_layers)
         print('freeze list:', freeze_list)
     
-    
-    
-    
-    
     model_ema = None
     if args.model_ema:
         model_ema = ModelEma(
