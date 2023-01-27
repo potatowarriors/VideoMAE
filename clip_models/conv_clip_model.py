@@ -45,24 +45,26 @@ class QuickGELU(nn.Module):
     
     
 class ReduceTemporalLayer(nn.Module):
-    def __init__(self, cls_split, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=3):
+    def __init__(self, current_frame, cls_split, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=3):
         super().__init__()
+        self.current_frame = current_frame
         self.cls_split = cls_split
         self.num_frames = num_frames
         if self.cls_split:
             self.patch_num = (img_size // patch_size) ** 2 #cls token +1
         else:
             self.patch_num = (img_size // patch_size) ** 2 + 1 #cls token +1
+        
         self.act = QuickGELU()
         self.downample = nn.Linear(embed_dim, embed_dim//2)
-        self.reduce = nn.Conv1d(embed_dim//2, embed_dim//2, kernel_size=tubelet_size, stride=1, padding=1, groups=embed_dim//2)
+        self.reduce = nn.Conv1d(embed_dim//2, embed_dim//2, kernel_size=4, stride=2, padding=1, groups=embed_dim//2)
         self.upsample = nn.Linear(embed_dim//2, embed_dim)
         
     def forward(self, x):
         if self.cls_split:
             cls_tok, x = cls_split(x) # x is patch token
         x = self.downample(x)
-        x = rearrange(x, 'n (b t) d -> (b n) d t', t=self.num_frames)
+        x = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
         x = self.reduce(x)
         x = rearrange(x, '(b n) d t -> n (b t) d', n = self.patch_num)
         x = self.upsample(self.act(x))
@@ -77,7 +79,13 @@ class ResidualAttentionBlock(nn.Module):
         super().__init__()
 
         self.layer_num = layer_num
-        self.reduce = ReduceTemporalLayer(cls_split)
+        self.current_frame = None
+        if self.layer_num == 0 or self.layer_num % 3 != 0:
+            pass
+        else:
+            self.current_frame = num_frames // (2 ** (self.layer_num // 3 -1))
+            self.avg_pool = nn.AvgPool1d(kernel_size=2, stride=2, padding= 0)
+            self.reduce = ReduceTemporalLayer(self.current_frame, cls_split)
         self.attn = nn.MultiheadAttention(d_model, n_head)
         self.ln_1 = LayerNorm(d_model)
         self.mlp = nn.Sequential(OrderedDict([
@@ -93,8 +101,13 @@ class ResidualAttentionBlock(nn.Module):
         self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
         return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
-    def forward(self, x):
-        x = x + self.drop_path(self.reduce(x))
+    def forward(self, x): # x = [n (b t) d]
+        if self.current_frame is not None:
+            b = x.shape[1] // self.current_frame
+            x_half = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
+            x_half = self.avg_pool(x_half)
+            x_half = rearrange(x_half, '(b n) d t -> n (b t) d', b=b)
+            x = x_half + self.drop_path(self.reduce(x))
         x = x + self.drop_path(self.attention(self.ln_1(x)))
         x = x + self.drop_path(self.mlp(self.ln_2(x)))
         return x
