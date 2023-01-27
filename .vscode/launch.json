@@ -18,7 +18,6 @@
                     "--vmae_model", "t2s_vit_base_patch16_224",
                     "--clip_model", "conv",
                     "--clip_frame", "all",
-                    "--cls_split", "False",
                     "--data_set", "EPIC",
                     "--pred_type", "noun",
                     "--nb_classes", "300",
@@ -44,6 +43,7 @@
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
                     "--dist_eval",
+                    "--freeze_layers", "attn", "ln_1", "mlp", "ln_2"
                ]
           }
      ]

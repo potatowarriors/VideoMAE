@@ -192,7 +192,7 @@ def get_args():
 
     parser.add_argument('--enable_deepspeed', action='store_true', default=False)
     # new settings
-    parser.add_argument('--freeze_layers', action='store_true', default=False)
+    parser.add_argument('--freeze_layers', default=None, nargs='+', type=str)
     parser.add_argument('--slack_api', type=str,default=None)
 
     known_args, _ = parser.parse_known_args()
@@ -315,7 +315,9 @@ def main(args, ds_init):
     
     
     model = clip.load(args.clip_finetune, args, device='cuda')
-    # model, freeze_list = freeze_block(model, ['attn','ln_1','mlp','ln_2'])
+    if args.freeze_layers is not None:
+        model, freeze_list = freeze_block(model, args.freeze_layers)
+        print('freeze list:', freeze_list)
     
     
     
