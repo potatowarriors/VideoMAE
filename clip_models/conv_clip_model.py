@@ -86,6 +86,7 @@ class ResidualAttentionBlock(nn.Module):
 
         self.layer_num = layer_num
         self.current_frame = None
+        self.dim = d_model
         if self.layer_num % 3 != 0:
             pass
         else:
@@ -93,6 +94,7 @@ class ResidualAttentionBlock(nn.Module):
                 self.current_frame = 16
             else:
                 self.current_frame = num_frames // (2 ** (self.layer_num // 3 -1))
+            self.temporal_posembed = nn.Parameter(torch.zeros(self.current_frame, d_model))
             self.avg_pool = nn.AvgPool1d(kernel_size=2, stride=2, padding= 0)
             self.reduce = ReduceTemporalLayer(self.current_frame, cls_split)
         self.attn = nn.MultiheadAttention(d_model, n_head)
@@ -113,6 +115,9 @@ class ResidualAttentionBlock(nn.Module):
     def forward(self, x):
         if self.current_frame is not None:
             b = x.shape[1] // self.current_frame
+            x = rearrange(x, 'n (b t) d -> b t n d', b =b)
+            x = x + self.temporal_posembed.to(x.dtype).view(1, self.current_frame, 1, self.dim)
+            x = rearrange(x, 'b t n d -> n (b t) d', b = b)
             x_half = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
             x_half = self.avg_pool(x_half)
             x_half = rearrange(x_half, '(b n) d t -> n (b t) d', b=b)
