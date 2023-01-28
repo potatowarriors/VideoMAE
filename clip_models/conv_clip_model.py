@@ -54,22 +54,18 @@ class ReduceTemporalLayer(nn.Module):
             self.patch_num = (img_size // patch_size) ** 2 #cls token +1
         else:
             self.patch_num = (img_size // patch_size) ** 2 + 1 #cls token +1
-        
         self.act = QuickGELU()
-        self.downample = nn.Linear(embed_dim, embed_dim//2)
-        self.reduce = nn.Conv1d(embed_dim//2, embed_dim//2, kernel_size=4, stride=2, padding=1, groups=embed_dim//2)
-        self.upsample = nn.Linear(embed_dim//2, embed_dim)
+        self.reduce = nn.Conv2d(self.patch_num, self.patch_num, kernel_size=(2,3), stride=(2,1), padding=(0,1), groups=self.patch_num)
         
     def forward(self, x):
         if self.cls_split:
             cls_tok, x = cls_split(x) # x is patch token
-        x = self.downample(x)
-        x = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
+        x = rearrange(x, 'n (b t) d -> b n t d', t=self.current_frame)
         x = self.reduce(x)
-        x = rearrange(x, '(b n) d t -> n (b t) d', n = self.patch_num)
-        x = self.upsample(self.act(x))
+        x = rearrange(x, 'b n t d -> n (b t) d', n = self.patch_num)
         if self.cls_split:
             x = torch.cat((cls_tok, x), dim = 0)
+        x = self.act(x)
         
         return x
 
@@ -101,7 +97,7 @@ class ResidualAttentionBlock(nn.Module):
         self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
         return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
-    def forward(self, x): # x = [n (b t) d]
+    def forward(self, x):
         if self.current_frame is not None:
             b = x.shape[1] // self.current_frame
             x_half = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
