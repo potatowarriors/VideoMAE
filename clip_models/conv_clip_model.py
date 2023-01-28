@@ -49,23 +49,33 @@ class ReduceTemporalLayer(nn.Module):
         super().__init__()
         self.current_frame = current_frame
         self.cls_split = cls_split
+        self.img_size = img_size
         self.num_frames = num_frames
+        self.in_chans = in_chans
         if self.cls_split:
             self.patch_num = (img_size // patch_size) ** 2 #cls token +1
         else:
             self.patch_num = (img_size // patch_size) ** 2 + 1 #cls token +1
         self.act = QuickGELU()
-        self.reduce = nn.Conv2d(self.patch_num, self.patch_num, kernel_size=(2,3), stride=(2,1), padding=(0,1), groups=self.patch_num)
+        self.avg_pool = nn.AvgPool1d(kernel_size=2,stride=2,padding=0)
+        self.reduce = nn.Conv3d(self.in_chans, self.in_chans, kernel_size=(4,3,3), stride=(2,1,1), padding=(1,1,1))
         
     def forward(self, x):
         if self.cls_split:
             cls_tok, x = cls_split(x) # x is patch token
-        x = rearrange(x, 'n (b t) d -> b n t d', t=self.current_frame)
+        x = rearrange(x, 'n (b t) d -> b t n d', t=self.current_frame)
+        b, t, n, d = x.size()
+        x = x.reshape(-1, self.current_frame, self.in_chans, self.img_size, self.img_size).permute(0,2,1,3,4).contiguous() # b c t h w
         x = self.reduce(x)
-        x = rearrange(x, 'b n t d -> n (b t) d', n = self.patch_num)
-        if self.cls_split:
-            x = torch.cat((cls_tok, x), dim = 0)
         x = self.act(x)
+        x = x.permute(0,2,1,3,4).contiguous()
+        x = x.reshape(b, self.current_frame//2, self.patch_num, d).contiguous()
+        x = rearrange(x, 'b t n d -> n (b t) d', n = self.patch_num)
+        if self.cls_split:
+            cls_tok = rearrange(cls_tok, 'n (b t) d -> (b n) d t', t=self.current_frame)
+            cls_tok = self.avg_pool(cls_tok)
+            cls_tok = rearrange(cls_tok, '(b n) d t -> n (b t) d', b=b)
+            x = torch.cat((cls_tok, x), dim = 0)
         
         return x
 
