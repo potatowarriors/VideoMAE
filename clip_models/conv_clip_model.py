@@ -86,10 +86,13 @@ class ResidualAttentionBlock(nn.Module):
 
         self.layer_num = layer_num
         self.current_frame = None
-        if self.layer_num == 0 or self.layer_num % 3 != 0:
+        if self.layer_num % 3 != 0:
             pass
         else:
-            self.current_frame = num_frames // (2 ** (self.layer_num // 3 -1))
+            if self.layer_num == 0:
+                self.current_frame = 16
+            else:
+                self.current_frame = num_frames // (2 ** (self.layer_num // 3 -1))
             self.avg_pool = nn.AvgPool1d(kernel_size=2, stride=2, padding= 0)
             self.reduce = ReduceTemporalLayer(self.current_frame, cls_split)
         self.attn = nn.MultiheadAttention(d_model, n_head)
@@ -175,9 +178,9 @@ class VisionTransformer(nn.Module):
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
         
-        if all_frame_setting:
-            x = rearrange(x, '(b t) n d -> b t n d', b=b)
-            x = x.mean(dim=1)
+        # if all_frame_setting:
+        #     x = rearrange(x, '(b t) n d -> b t n d', b=b)
+        #     x = x.mean(dim=1)
 
         x = self.ln_post(x[:, 0, :])
 
