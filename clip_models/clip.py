@@ -35,7 +35,9 @@ def load(model_path, args, device: Union[str, torch.device] = "cuda" if torch.cu
     if args.clip_model == 't2s':
         from .t2s_clip_model import build_model
     elif args.clip_model == 'conv':
-        from .conv_clip_model import build_model
+        from .attnpool_clip_model import build_model
+    elif args.clip_model == 'attnpool':
+        from .attnpool_clip_model import build_model
     else:
         raise ImportError
     

@@ -38,6 +38,8 @@ class QuickGELU(nn.Module):
     def forward(self, x: torch.Tensor):
         return x * torch.sigmoid(1.702 * x)
     
+    
+    
 class TemporalPoolingAttn(nn.Module):
     def __init__(self, embed_dim, current_frame, drop_path_rate):
         super().__init__()
@@ -65,10 +67,11 @@ class TemporalPoolingAttn(nn.Module):
         
         pool_q = pool_q * self.scale
         
-        frame_attn = (pool_q @ pool_k.transpose(-2,-1))
+        frame_attn = (pool_q.transpose(-2,-1) @ pool_k)
         frame_attn = frame_attn.softmax(dim=-1)
         
-        x = (frame_attn @ pool_v).transpose(1, 2)
+        x = pool_q.permute(0,1,3,2) + (frame_attn @ pool_v.transpose(-2,-1))
+        x = rearrange(x, 'b n t d -> n (b t) d')
         
         return x
     
@@ -86,7 +89,7 @@ class ResidualAttentionBlock(nn.Module):
             if self.layer_num == 0:
                 self.current_frame = 16
             else:
-                self.current_frame = num_frames // (2 ** (self.layer_num // 3 -1))
+                self.current_frame = num_frames // (2 ** (self.layer_num // 3))
             self.pool = TemporalPoolingAttn(embed_dim=d_model, current_frame=self.current_frame, drop_path_rate=drop_path_rate)
         self.attn = nn.MultiheadAttention(d_model, n_head)
         self.ln_1 = LayerNorm(d_model)
@@ -104,7 +107,8 @@ class ResidualAttentionBlock(nn.Module):
         return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
     def forward(self, x):
-        x = self.pool(x)
+        if self.current_frame is not None:
+            x = self.pool(x)
         x = x + self.drop_path(self.attention(self.ln_1(x)))
         x = x + self.drop_path(self.mlp(self.ln_2(x)))
         return x

@@ -36,7 +36,7 @@ def get_args():
     # Model parameters
     parser.add_argument('--vmae_model', default='vit_base_patch16_224', type=str, metavar='MODEL',
                         help='Name of model to train')
-    parser.add_argument('--clip_model', default='clip', choices=['clip', 't2s','conv'], type=str, help='pick clip version')
+    parser.add_argument('--clip_model', default='clip', choices=['clip', 't2s','conv','attnpool'], type=str, help='pick clip version')
     parser.add_argument('--clip_frame', default=None, choices=['center', 'all'], type=str, help='pick clip frame number')
     parser.add_argument('--cls_split', default=False, type=bool, help='using cls token split')
     parser.add_argument('--tubelet_size', type=int, default= 2)

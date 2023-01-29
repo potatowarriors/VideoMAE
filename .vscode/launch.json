@@ -16,9 +16,8 @@
                     "--master_port", "12330",
                     "/data/kide004/repos/VideoMAE/run_onemodel_finetuning.py",
                     "--vmae_model", "t2s_vit_base_patch16_224",
-                    "--clip_model", "conv",
+                    "--clip_model", "attnpool",
                     "--clip_frame", "all",
-                    "--cls_split", "True",
                     "--data_set", "EPIC",
                     "--pred_type", "noun",
                     "--nb_classes", "300",
@@ -44,7 +43,6 @@
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
                     "--dist_eval",
-                    "--slack_api", "xoxb-4494660617701-4500069866596-8W5VJYddd6QCRRFJoeG5cIGZ"
                ]
           }
      ]
