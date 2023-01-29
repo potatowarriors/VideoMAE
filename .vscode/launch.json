@@ -18,6 +18,7 @@
                     "--vmae_model", "t2s_vit_base_patch16_224",
                     "--clip_model", "conv",
                     "--clip_frame", "all",
+                    "--cls_split", "True",
                     "--data_set", "EPIC",
                     "--pred_type", "noun",
                     "--nb_classes", "300",
@@ -43,7 +44,9 @@
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
                     "--dist_eval",
-                    "--slack_api", "xoxb-4494660617701-4500069866596-8W5VJYddd6QCRRFJoeG5cIGZ"
+                    "--kernel_size", "3", "3",
+                    "--stride", "1", "1",
+                    "--pad_size", "1", "1"
                ]
           }
      ]

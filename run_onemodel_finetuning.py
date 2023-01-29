@@ -194,6 +194,10 @@ def get_args():
     # new settings
     parser.add_argument('--freeze_layers', default=None, nargs='+', type=str)
     parser.add_argument('--slack_api', type=str,default=None)
+    
+    parser.add_argument('--kernel_size', default=None, nargs='+', type=int)
+    parser.add_argument('--pad_size', default=None, nargs='+', type=int)
+    parser.add_argument('--stride', default=None, nargs='+', type=int)
 
     known_args, _ = parser.parse_known_args()
 
