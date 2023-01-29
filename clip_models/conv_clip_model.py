@@ -52,6 +52,7 @@ class ReduceTemporalLayer(nn.Module):
         self.img_size = img_size
         self.num_frames = num_frames
         self.in_chans = in_chans
+        self.embed_dim = embed_dim
         if self.cls_split:
             self.patch_num = (img_size // patch_size) ** 2 #cls token +1
         else:
@@ -59,6 +60,7 @@ class ReduceTemporalLayer(nn.Module):
         self.act = QuickGELU()
         self.avg_pool = nn.AvgPool1d(kernel_size=2,stride=2,padding=0)
         self.reduce = nn.Conv3d(self.in_chans, self.in_chans, kernel_size=(4,3,3), stride=(2,1,1), padding=(1,1,1))
+        self.temporal_posembed = nn.Parameter(torch.zeros(self.current_frame // 2, embed_dim))
         
     def forward(self, x):
         if self.cls_split:
@@ -70,11 +72,12 @@ class ReduceTemporalLayer(nn.Module):
         x = self.act(x)
         x = x.permute(0,2,1,3,4).contiguous()
         x = x.reshape(b, self.current_frame//2, self.patch_num, d).contiguous()
+        x = x + self.temporal_posembed.to(x.dtype).view(1, self.current_frame//2, 1, self.embed_dim)
         x = rearrange(x, 'b t n d -> n (b t) d', n = self.patch_num)
         if self.cls_split:
             cls_tok = rearrange(cls_tok, 'n (b t) d -> (b n) d t', t=self.current_frame)
             cls_tok = self.avg_pool(cls_tok)
-            cls_tok = rearrange(cls_tok, '(b n) d t -> n (b t) d', b=b)
+            cls_tok = rearrange(cls_tok, 'b d t -> (b t) d').unsqueeze(dim=0)
             x = torch.cat((cls_tok, x), dim = 0)
         
         return x
@@ -90,11 +93,10 @@ class ResidualAttentionBlock(nn.Module):
         if self.layer_num % 3 != 0:
             pass
         else:
-            if self.layer_num == 0:
-                self.current_frame = 16
+            if layer_num == 0 :
+                self.current_frame = num_frames
             else:
-                self.current_frame = num_frames // (2 ** (self.layer_num // 3 -1))
-            self.temporal_posembed = nn.Parameter(torch.zeros(self.current_frame, d_model))
+                self.current_frame = num_frames // (2 ** (self.layer_num // 3))
             self.avg_pool = nn.AvgPool1d(kernel_size=2, stride=2, padding= 0)
             self.reduce = ReduceTemporalLayer(self.current_frame, cls_split)
         self.attn = nn.MultiheadAttention(d_model, n_head)
@@ -115,9 +117,6 @@ class ResidualAttentionBlock(nn.Module):
     def forward(self, x):
         if self.current_frame is not None:
             b = x.shape[1] // self.current_frame
-            x = rearrange(x, 'n (b t) d -> b t n d', b =b)
-            x = x + self.temporal_posembed.to(x.dtype).view(1, self.current_frame, 1, self.dim)
-            x = rearrange(x, 'b t n d -> n (b t) d', b = b)
             x_half = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
             x_half = self.avg_pool(x_half)
             x_half = rearrange(x_half, '(b n) d t -> n (b t) d', b=b)
@@ -154,7 +153,6 @@ class VisionTransformer(nn.Module):
         self.class_embedding = nn.Parameter(scale * torch.randn(width))
         self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) ** 2 + 1, width))
         self.ln_pre = LayerNorm(width)
-        self.temporal_posembed = nn.Parameter(torch.zeros([num_frames, width]))
 
         self.transformer = Transformer(width, layers, heads, drop_path_rate, num_frames, batch_size, cls_split)
 
@@ -173,12 +171,9 @@ class VisionTransformer(nn.Module):
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
         x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
         x = x + self.positional_embedding.to(x.dtype)
+        
         x = self.ln_pre(x)
-        if all_frame_setting:
-            x = rearrange(x, '(b t) n d -> b t n d', b=b)
-            x = x + self.temporal_posembed.to(x.dtype).view(1, t, 1, self.embed_dim)
-            x = rearrange(x, 'b t n d -> (b t) n d')
-
+        
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD

@@ -12,7 +12,7 @@
                "module": "torch.distributed.launch",
                "justMyCode": true,
                "args" : [
-                    "--nproc_per_node", "1",
+                    "--nproc_per_node", "8",
                     "--master_port", "12330",
                     "/data/kide004/repos/VideoMAE/run_onemodel_finetuning.py",
                     "--vmae_model", "t2s_vit_base_patch16_224",
@@ -37,7 +37,7 @@
                     "--num_frames", "16",
                     "--num_sample", "1",
                     "--opt", "adamw",
-                    "--lr", "0.1",
+                    "--lr", "5e-5",
                     "--opt_betas", "0.9","0.999",
                     "--weight_decay", "0.05",
                     "--test_num_segment", "2",
