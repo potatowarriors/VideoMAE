@@ -10,11 +10,6 @@ from timm.models.layers import drop_path, trunc_normal_
 
 
 
-def cls_split(tensor):
-    # tensor (b t) n d
-    cls_tok, pat_tok = tensor[:1, :, :], tensor[1:, :, :]
-    return cls_tok, pat_tok
-
 class DropPath(nn.Module):
     """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
     """
@@ -43,41 +38,40 @@ class QuickGELU(nn.Module):
     def forward(self, x: torch.Tensor):
         return x * torch.sigmoid(1.702 * x)
     
-    
-class ReduceTemporalLayer(nn.Module):
-    def __init__(self, current_frame, cls_split, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=3):
+class TemporalPoolingAttn(nn.Module):
+    def __init__(self, embed_dim, current_frame, drop_path_rate):
         super().__init__()
         self.current_frame = current_frame
-        self.cls_split = cls_split
-        self.img_size = img_size
-        self.num_frames = num_frames
-        self.in_chans = in_chans
-        if self.cls_split:
-            self.patch_num = (img_size // patch_size) ** 2 #cls token +1
-        else:
-            self.patch_num = (img_size // patch_size) ** 2 + 1 #cls token +1
-        self.act = QuickGELU()
-        self.avg_pool = nn.AvgPool1d(kernel_size=2,stride=2,padding=0)
-        self.reduce = nn.Conv3d(self.in_chans, self.in_chans, kernel_size=(4,3,3), stride=(2,1,1), padding=(1,1,1))
+        self.scale = embed_dim ** -0.5
+        
+        self.pool_q = nn.Linear(self.current_frame, self.current_frame//2, bias=False)
+        self.pool_q_bias = nn.Parameter(torch.zeros(self.current_frame//2))
+        
+        self.pool_kv = nn.Linear(self.current_frame, self.current_frame, bias=False)
+        self.pool_kv_bias = nn.Parameter(torch.zeros(self.current_frame//2))
+        
+        self.pool_prj = nn.Linear(self.current_frame//2, self.current_frame//2)
         
     def forward(self, x):
-        if self.cls_split:
-            cls_tok, x = cls_split(x) # x is patch token
-        x = rearrange(x, 'n (b t) d -> b t n d', t=self.current_frame)
-        b, t, n, d = x.size()
-        x = x.reshape(-1, self.current_frame, self.in_chans, self.img_size, self.img_size).permute(0,2,1,3,4).contiguous() # b c t h w
-        x = self.reduce(x)
-        x = self.act(x)
-        x = x.permute(0,2,1,3,4).contiguous()
-        x = x.reshape(b, self.current_frame//2, self.patch_num, d).contiguous()
-        x = rearrange(x, 'b t n d -> n (b t) d', n = self.patch_num)
-        if self.cls_split:
-            cls_tok = rearrange(cls_tok, 'n (b t) d -> (b n) d t', t=self.current_frame)
-            cls_tok = self.avg_pool(cls_tok)
-            cls_tok = rearrange(cls_tok, '(b n) d t -> n (b t) d', b=b)
-            x = torch.cat((cls_tok, x), dim = 0)
+        x = rearrange(x, 'n (b t) d -> b n d t', t = self.current_frame)
+        b, n, d, t = x.size()
+        pool_q_bias = self.pool_q_bias
+        pool_kv_bias = torch.cat((torch.zeros_like(self.pool_kv_bias, requires_grad=False), self.pool_kv_bias))
+        
+        pool_q = F.linear(input=x, weight=self.pool_q.weight, bias=pool_q_bias)
+        pool_kv = F.linear(input=x, weight=self.pool_kv.weight, bias=pool_kv_bias)
+        pool_kv = pool_kv.reshape(b, n, d, 2, t//2).permute(3,0,1,2,4)
+        pool_k, pool_v = pool_kv[0], pool_kv[1]
+        
+        pool_q = pool_q * self.scale
+        
+        frame_attn = (pool_q @ pool_k.transpose(-2,-1))
+        frame_attn = frame_attn.softmax(dim=-1)
+        
+        x = (frame_attn @ pool_v).transpose(1, 2)
         
         return x
+    
 
 
 class ResidualAttentionBlock(nn.Module):
@@ -86,7 +80,6 @@ class ResidualAttentionBlock(nn.Module):
 
         self.layer_num = layer_num
         self.current_frame = None
-        self.dim = d_model
         if self.layer_num % 3 != 0:
             pass
         else:
@@ -94,9 +87,7 @@ class ResidualAttentionBlock(nn.Module):
                 self.current_frame = 16
             else:
                 self.current_frame = num_frames // (2 ** (self.layer_num // 3 -1))
-            self.temporal_posembed = nn.Parameter(torch.zeros(self.current_frame, d_model))
-            self.avg_pool = nn.AvgPool1d(kernel_size=2, stride=2, padding= 0)
-            self.reduce = ReduceTemporalLayer(self.current_frame, cls_split)
+            self.pool = TemporalPoolingAttn(embed_dim=d_model, current_frame=self.current_frame, drop_path_rate=drop_path_rate)
         self.attn = nn.MultiheadAttention(d_model, n_head)
         self.ln_1 = LayerNorm(d_model)
         self.mlp = nn.Sequential(OrderedDict([
@@ -113,15 +104,7 @@ class ResidualAttentionBlock(nn.Module):
         return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
     def forward(self, x):
-        if self.current_frame is not None:
-            b = x.shape[1] // self.current_frame
-            x = rearrange(x, 'n (b t) d -> b t n d', b =b)
-            x = x + self.temporal_posembed.to(x.dtype).view(1, self.current_frame, 1, self.dim)
-            x = rearrange(x, 'b t n d -> n (b t) d', b = b)
-            x_half = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
-            x_half = self.avg_pool(x_half)
-            x_half = rearrange(x_half, '(b n) d t -> n (b t) d', b=b)
-            x = x_half + self.drop_path(self.reduce(x))
+        x = self.pool(x)
         x = x + self.drop_path(self.attention(self.ln_1(x)))
         x = x + self.drop_path(self.mlp(self.ln_2(x)))
         return x
@@ -154,7 +137,6 @@ class VisionTransformer(nn.Module):
         self.class_embedding = nn.Parameter(scale * torch.randn(width))
         self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) ** 2 + 1, width))
         self.ln_pre = LayerNorm(width)
-        self.temporal_posembed = nn.Parameter(torch.zeros([num_frames, width]))
 
         self.transformer = Transformer(width, layers, heads, drop_path_rate, num_frames, batch_size, cls_split)
 
@@ -174,18 +156,10 @@ class VisionTransformer(nn.Module):
         x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
         x = x + self.positional_embedding.to(x.dtype)
         x = self.ln_pre(x)
-        if all_frame_setting:
-            x = rearrange(x, '(b t) n d -> b t n d', b=b)
-            x = x + self.temporal_posembed.to(x.dtype).view(1, t, 1, self.embed_dim)
-            x = rearrange(x, 'b t n d -> (b t) n d')
 
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
-        
-        # if all_frame_setting:
-        #     x = rearrange(x, '(b t) n d -> b t n d', b=b)
-        #     x = x.mean(dim=1)
 
         x = self.ln_post(x[:, 0, :])
 
