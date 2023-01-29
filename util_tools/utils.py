@@ -314,7 +314,7 @@ def load_state_dict(model, state_dict, prefix='', ignore_missing="relative_posit
             if child is not None:
                 load(child, prefix + name + '.')
 
-    load(model.visual, prefix=prefix)
+    load(model, prefix=prefix)
 
     warn_missing_keys = []
     ignore_missing_keys = []
