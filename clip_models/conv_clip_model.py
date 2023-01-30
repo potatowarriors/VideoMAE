@@ -59,25 +59,24 @@ class ReduceTemporalLayer(nn.Module):
             self.patch_num = (img_size // patch_size) ** 2 + 1 #cls token +1
         self.act = QuickGELU()
         self.avg_pool = nn.AvgPool1d(kernel_size=2,stride=2,padding=0)
-        self.reduce = nn.Conv2d(self.current_frame, self.current_frame//2, kernel_size=(kernel_size[0],kernel_size[1]), 
+        self.reduce = nn.Conv2d(self.embed_dim, self.embed_dim, kernel_size=(kernel_size[0],kernel_size[1]), 
                                 stride=(stride[0],stride[1]), padding=(pad_size[0], pad_size[1]))
-        self.temporal_posembed = nn.Parameter(torch.zeros(self.current_frame // 2, embed_dim))
+        self.temporal_posembed = nn.Parameter(torch.zeros(embed_dim, self.patch_num, self.current_frame//2))
         
     def forward(self, x):
         if self.cls_split:
             cls_tok, x = cls_split(x) # x is patch token
-        x = rearrange(x, 'n (b t) d -> b t n d', t=self.current_frame)
+        x = rearrange(x, 'n (b t) d -> b d n t', t=self.current_frame)
         b, t, n, d = x.size()
         x = self.reduce(x)
         x = self.act(x)
-        x = x + self.temporal_posembed.to(x.dtype).view(1, self.current_frame//2, 1, self.embed_dim)
-        x = rearrange(x, 'b t n d -> n (b t) d', n = self.patch_num)
+        x = x + self.temporal_posembed.to(x.dtype).view(1, self.embed_dim, self.patch_num, self.current_frame//2)
+        x = rearrange(x, 'b d n t -> n (b t) d')
         if self.cls_split:
             cls_tok = rearrange(cls_tok, 'n (b t) d -> (b n) d t', t=self.current_frame)
             cls_tok = self.avg_pool(cls_tok)
             cls_tok = rearrange(cls_tok, 'b d t -> (b t) d').unsqueeze(dim=0)
             x = torch.cat((cls_tok, x), dim = 0)
-        
         return x
 
 
