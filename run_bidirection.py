@@ -19,11 +19,11 @@ from util_tools.optim_factory import create_optimizer, get_parameter_groups, Lay
 
 from dataset.datasets import build_dataset
 from engine_for_onemodel import train_one_epoch, validation_one_epoch, final_test, merge
-from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, laod_vmae_weights, load_clip_weights, freeze_block
+from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, freeze_block
 from util_tools.utils import cross_multiple_samples_collate, notice_message
 import util_tools.utils as utils
 import clip_models.clip as clip
-import videomae_models.t2s_fintune
+import videomae_models.bidir_modeling_crossattn
 
 
 def get_args():
@@ -36,9 +36,7 @@ def get_args():
     # Model parameters
     parser.add_argument('--vmae_model', default='vit_base_patch16_224', type=str, metavar='MODEL',
                         help='Name of model to train')
-    parser.add_argument('--clip_model', default='clip', choices=['clip', 't2s','conv'], type=str, help='pick clip version')
-    parser.add_argument('--clip_frame', default=None, choices=['center', 'all'], type=str, help='pick clip frame number')
-    parser.add_argument('--cls_split', default=False, type=bool, help='using cls token split')
+    parser.add_argument('--clip_frame', default=None, type=str)
     parser.add_argument('--tubelet_size', type=int, default= 2)
     parser.add_argument('--input_size', default=224, type=int,
                         help='videos input size')
@@ -195,10 +193,6 @@ def get_args():
     parser.add_argument('--freeze_layers', default=None, nargs='+', type=str)
     parser.add_argument('--slack_api', type=str,default=None)
     
-    parser.add_argument('--reduce_position', default=None, nargs='+', type=int)
-    parser.add_argument('--kernel_size', default=None, nargs='+', type=int)
-    parser.add_argument('--pad_size', default=None, nargs='+', type=int)
-    parser.add_argument('--stride', default=None, nargs='+', type=int)
 
     known_args, _ = parser.parse_known_args()
 
@@ -319,10 +313,24 @@ def main(args, ds_init):
     args.patch_size = patch_size
     
     
-    model = clip.load(args.clip_finetune, args, device='cuda')
-    if args.freeze_layers is not None:
-        model, freeze_list = freeze_block(model, args.freeze_layers)
-        print('freeze list:', freeze_list)
+    model = create_model(
+          args.vmae_model,
+          pretrained=False,
+          num_classes=args.nb_classes,
+          all_frames=args.num_frames * args.num_segments,
+          tubelet_size=args.tubelet_size,
+          drop_rate=args.drop,
+          drop_path_rate=args.drop_path,
+          attn_drop_rate=args.attn_drop_rate,
+          drop_block_rate=None,
+          use_mean_pooling=args.use_mean_pooling,
+          init_scale=args.init_scale,
+      )
+    
+    load_bidir_weights(model, args)
+    
+    model.to(device)
+    
     
     model_ema = None
     if args.model_ema:

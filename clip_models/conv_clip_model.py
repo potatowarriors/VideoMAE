@@ -58,23 +58,21 @@ class ReduceTemporalLayer(nn.Module):
         else:
             self.patch_num = (img_size // patch_size) ** 2 + 1 #cls token +1
         self.act = QuickGELU()
-        self.avg_pool = nn.AvgPool1d(kernel_size=2,stride=2,padding=0)
-        self.reduce = nn.Conv2d(self.embed_dim, self.embed_dim, kernel_size=(kernel_size[0],kernel_size[1]), 
-                                stride=(stride[0],stride[1]), padding=(pad_size[0], pad_size[1]))
-        self.temporal_posembed = nn.Parameter(torch.zeros(embed_dim, self.patch_num, self.current_frame//2))
+        self.max_pool = nn.MaxPool1d(kernel_size=2,stride=2,padding=0)
+        self.reduce = nn.Conv1d(self.embed_dim, self.embed_dim, kernel_size=(kernel_size[0]), stride=(stride[0]), padding=(pad_size[0]),groups=self.embed_dim)
+        self.temporal_posembed = nn.Parameter(torch.zeros(1, self.embed_dim, self.current_frame//2))
         
     def forward(self, x):
         if self.cls_split:
             cls_tok, x = cls_split(x) # x is patch token
-        x = rearrange(x, 'n (b t) d -> b d n t', t=self.current_frame)
-        b, t, n, d = x.size()
+        x = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
         x = self.reduce(x)
         x = self.act(x)
-        x = x + self.temporal_posembed.to(x.dtype).view(1, self.embed_dim, self.patch_num, self.current_frame//2)
-        x = rearrange(x, 'b d n t -> n (b t) d')
+        x = x + self.temporal_posembed.to(x.dtype).view(1, self.embed_dim, self.current_frame//2)
+        x = rearrange(x, '(b n) d t -> n (b t) d', n=self.patch_num)
         if self.cls_split:
             cls_tok = rearrange(cls_tok, 'n (b t) d -> (b n) d t', t=self.current_frame)
-            cls_tok = self.avg_pool(cls_tok)
+            cls_tok = self.max_pool(cls_tok)
             cls_tok = rearrange(cls_tok, 'b d t -> (b t) d').unsqueeze(dim=0)
             x = torch.cat((cls_tok, x), dim = 0)
         return x
@@ -82,20 +80,17 @@ class ReduceTemporalLayer(nn.Module):
 
 class ResidualAttentionBlock(nn.Module):
     def __init__(self, d_model: int, n_head: int, drop_path_rate, num_frames, layer_num, batch_size, cls_split, 
-                 kernel_size, stride, pad_size, attn_mask: torch.Tensor = None):
+                 reduce_position, kernel_size, stride, pad_size, attn_mask: torch.Tensor = None):
         super().__init__()
 
         self.layer_num = layer_num
         self.current_frame = None
         self.dim = d_model
-        if self.layer_num % 3 != 0:
+        if self.layer_num not in reduce_position:
             pass
         else:
-            if layer_num == 0 :
-                self.current_frame = num_frames
-            else:
-                self.current_frame = num_frames // (2 ** (self.layer_num // 3))
-            self.avg_pool = nn.AvgPool1d(kernel_size=2, stride=2, padding= 0)
+            self.current_frame = num_frames // (2 ** (reduce_position.index(layer_num)))
+            self.max_pool = nn.MaxPool1d(kernel_size=2, stride=2, padding= 0)
             self.reduce = ReduceTemporalLayer(self.current_frame, cls_split, kernel_size, stride, pad_size)
         self.attn = nn.MultiheadAttention(d_model, n_head)
         self.ln_1 = LayerNorm(d_model)
@@ -116,7 +111,7 @@ class ResidualAttentionBlock(nn.Module):
         if self.current_frame is not None:
             b = x.shape[1] // self.current_frame
             x_half = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
-            x_half = self.avg_pool(x_half)
+            x_half = self.max_pool(x_half)
             x_half = rearrange(x_half, '(b n) d t -> n (b t) d', b=b)
             x = x_half + self.drop_path(self.reduce(x))
         x = x + self.drop_path(self.attention(self.ln_1(x)))
@@ -126,13 +121,13 @@ class ResidualAttentionBlock(nn.Module):
 
 class Transformer(nn.Module):
     def __init__(self, width: int, layers: int, heads: int, drop_path_rate, num_frames, batch_size, cls_split, 
-                 kernel_size:list, strdie:list, pad_size:list, attn_mask: torch.Tensor = None):
+                 reduce_position, kernel_size:list, strdie:list, pad_size:list, attn_mask: torch.Tensor = None):
         super().__init__()
         self.width = width
         self.layers = layers
         self.drop_path_rate = drop_path_rate
         dpr = [x.item() for x in torch.linspace(0, self.drop_path_rate, self.layers)]
-        self.resblocks = nn.ModuleList([ResidualAttentionBlock(width, heads, dpr[i], num_frames, i, batch_size, cls_split, kernel_size, strdie, pad_size, attn_mask) for i in range(layers)])
+        self.resblocks = nn.ModuleList([ResidualAttentionBlock(width, heads, dpr[i], num_frames, i, batch_size, cls_split, reduce_position, kernel_size, strdie, pad_size, attn_mask) for i in range(layers)])
 
     def forward(self, x: torch.Tensor):
         for blk in self.resblocks:
@@ -142,7 +137,7 @@ class Transformer(nn.Module):
 
 class VisionTransformer(nn.Module):
     def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, drop_path_rate: float, num_frames: int, batch_size: int, cls_split:bool,
-                 kernel_size:list, stride:list, pad_size:list):
+                 reduce_position:list, kernel_size:list, stride:list, pad_size:list):
         super().__init__()
         self.layers = layers
         self.input_resolution = input_resolution
@@ -153,8 +148,9 @@ class VisionTransformer(nn.Module):
         self.class_embedding = nn.Parameter(scale * torch.randn(width))
         self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) ** 2 + 1, width))
         self.ln_pre = LayerNorm(width)
+        self.temporal_posembed = nn.Parameter(torch.zeros([num_frames, width]))
 
-        self.transformer = Transformer(width, layers, heads, drop_path_rate, num_frames, batch_size, cls_split, kernel_size, stride, pad_size)
+        self.transformer = Transformer(width, layers, heads, drop_path_rate, num_frames, batch_size, cls_split, reduce_position, kernel_size, stride, pad_size)
 
         self.ln_post = LayerNorm(width)
         
@@ -173,6 +169,10 @@ class VisionTransformer(nn.Module):
         x = x + self.positional_embedding.to(x.dtype)
         
         x = self.ln_pre(x)
+        if all_frame_setting:
+            x = rearrange(x, '(b t) n d -> b t n d', b=b)
+            x = x + self.temporal_posembed.to(x.dtype).view(1, t, 1, self.embed_dim)
+            x = rearrange(x, 'b t n d -> (b t) n d')
         
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
@@ -198,6 +198,7 @@ class CLIP(nn.Module):
                  num_frames,
                  batch_size,
                  cls_split : bool,
+                 reduce_position :list,
                  kernel_size : list,
                  stride : list,
                  pad_size : list,
@@ -220,6 +221,7 @@ class CLIP(nn.Module):
             num_frames = self.num_frames,
             batch_size=self.batch_size,
             cls_split = cls_split,
+            reduce_position = reduce_position,
             kernel_size = kernel_size,
             stride = stride,
             pad_size = pad_size
@@ -308,6 +310,7 @@ def build_model(state_dict: dict, args):
     drop_path = args.drop_path
     batch_size = args.batch_size
     cls_split = args.cls_split
+    reduce_position = args.reduce_position
     kernel_size = args.kernel_size
     stride = args.stride
     pad_size = args.pad_size
@@ -315,7 +318,7 @@ def build_model(state_dict: dict, args):
 
     model = CLIP(
         image_resolution, vision_layers, vision_width, vision_patch_size, num_classes, drop_path, num_frames, batch_size, cls_split,
-        kernel_size, stride, pad_size
+        reduce_position, kernel_size, stride, pad_size
     )
 
     for key in ["input_resolution", "context_length", "vocab_size"]:

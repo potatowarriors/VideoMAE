@@ -8,7 +8,7 @@ from timm.models.layers import drop_path, to_2tuple, trunc_normal_
 from timm.models.registry import register_model
 from collections import OrderedDict
 from einops import rearrange
-import clip_models.clip as clip
+import clip
 
 
 def _cfg(url='', **kwargs):
@@ -19,7 +19,6 @@ def _cfg(url='', **kwargs):
         'mean': (0.5, 0.5, 0.5), 'std': (0.5, 0.5, 0.5),
         **kwargs
     }
-
 
 class DropPath(nn.Module):
     """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
@@ -93,6 +92,29 @@ class Mlp(nn.Module):
         # commit this for the orignal BERT implement 
         x = self.fc2(x)
         x = self.drop(x)
+        return x
+   
+
+class ReduceTemporalLayer(nn.Module):
+    def __init__(self, current_frame, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=3):
+        super().__init__()
+        self.current_frame = current_frame
+        self.img_size = img_size
+        self.num_frames = num_frames
+        self.in_chans = in_chans
+        self.embed_dim = embed_dim
+        self.act = QuickGELU()
+        self.max_pool = nn.MaxPool1d(kernel_size=2,stride=2,padding=0)
+        self.reduce = nn.Conv1d(self.embed_dim, self.embed_dim, kernel_size=2, stride=2, padding=0,groups=self.embed_dim)
+        
+    def forward(self, x):
+        b = x.shape[0] // self.current_frame
+        x = rearrange(x, '(b t) n d -> (b n) d t', t=self.current_frame)
+        temp_x = self.max_pool(x)
+        x = self.reduce(x)
+        x = self.act(x)
+        x = temp_x + x
+        x = rearrange(x, '(b n) d t -> (b t) n d', b=b)
         return x
 
 # 기존 weight load편의성을 위해 Attention이름을 유지한다.
@@ -171,8 +193,9 @@ class CrossAttentionS2T(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
 
     def forward(self, s_x, t_x):
-        B, s_N, C = s_x.shape
-        _, t_N, C = t_x.shape
+        B, t_N, C = t_x.shape
+        s_x = rearrange(s_x, '(b t) n d -> b (t n) d', b=B)
+        _, s_N, C = s_x.shape
         s2t_q_bias = None
         s2t_kv_bias = None
         if self.s2t_q_bias is not None:
@@ -225,8 +248,9 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         self.attn_mask = attn_mask
     
     def t2s_cross_attn(self, s_x, t_x):
-        B, s_N, C = s_x.shape
-        _, t_N, C = t_x.shape
+        B, t_N, C = t_x.shape
+        s_x = rearrange(s_x, '(b t) n d -> b (t n) d', b=B)
+        _, s_N, C = s_x.shape
         t2s_q_bias = self.t2s_q_bias
         t2s_kv_bias = torch.cat((torch.zeros_like(self.t2s_kv_bias, requires_grad=False), self.t2s_kv_bias))
         
@@ -243,6 +267,7 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         
         s_x = (t2s_attn @ t2s_v).transpose(1, 2).reshape(B, s_N, -1)
         s_x = self.t2s_proj(s_x)
+        s_x = rearrange(s_x, 'b (t n) d -> (b t) n d', t=16)
         return s_x
 
     def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
@@ -252,9 +277,10 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
 class Block(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., init_values=None, act_layer=nn.GELU, norm_layer=nn.LayerNorm,
+                 drop_path=0., init_values=None, num_layer=0, reduce_position=[], act_layer=nn.GELU, norm_layer=nn.LayerNorm,
                  attn_head_dim=None):
         super().__init__()
+        self.current_frame = None
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
@@ -263,13 +289,16 @@ class Block(nn.Module):
         self.clip_ln_1 = norm_layer(dim)
         self.clip_attn = nn.MultiheadAttention(dim, num_heads)
         
-        self.ln_s2t = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
-        self.s2t_cross = CrossAttentionS2T(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
-            attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
+        if num_layer in reduce_position:
+          self.current_frame = 16 // (2 ** (reduce_position.index(num_layer)))
+          #self.reduce = ReduceTemporalLayer(current_frame=self.current_frame)
+          self.ln_s2t = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
+          self.s2t_cross = CrossAttentionS2T(
+               dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+               attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
         
-        self.ln_t2s = norm_layer(dim)
-        self.t2s_cross = CrossAttentionT2S(dim, num_heads)
+          self.ln_t2s = norm_layer(dim)
+          self.t2s_cross = CrossAttentionT2S(dim, num_heads)
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         
@@ -304,14 +333,15 @@ class Block(nn.Module):
             #s_x = rearrange(s_x, '(b t) n d -> b t n d', t=16) # cross attention을 위해 shape을 수정해준다. center frame만 쓰니까 잠시 꺼둔다.
             #cls, patches = torch.split(s_x,[1, 196], dim=1)
             
-            s_x = s_x + self.drop_path(self.t2s_cross(self.ln_t2s(s_x), t_x))
-            
-            # cross attn 순서에 대한 ablation study를 해야 할까....?
-            #cls = cls + self.drop_path(self.t2s_cross(cls, t_x).unsqueeze(2)) # Cross attention time to space. 이건 잠시 검증을 위해 꺼둔다.
-            t_x = t_x + self.drop_path(self.s2t_cross(s_x, self.ln_s2t(t_x))) # Cross attention space to time
-            
-            #s_x = torch.cat([cls, patches], dim=1) 
-            #s_x = rearrange(s_x, 'b t n d -> (b t) n d', t=16) center frame만 쓰니까 잠시 꺼둔다.
+            if self.current_frame is not None:
+                s_x = s_x + self.drop_path(self.t2s_cross(self.ln_t2s(s_x), t_x))
+                
+                # cross attn 순서에 대한 ablation study를 해야 할까....?
+                #cls = cls + self.drop_path(self.t2s_cross(cls, t_x).unsqueeze(2)) # Cross attention time to space. 이건 잠시 검증을 위해 꺼둔다.
+                t_x = t_x + self.drop_path(self.s2t_cross(s_x, self.ln_s2t(t_x))) # Cross attention space to time
+                
+                #s_x = torch.cat([cls, patches], dim=1) 
+                #s_x = rearrange(s_x, 'b t n d -> (b t) n d', t=16) center frame만 쓰니까 잠시 꺼둔다.
             
             s_x = s_x + self.drop_path(self.clip_mlp(self.clip_ln_2(s_x))) # pass CLIP FFN
             t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x))) # pass VMAE FFN
@@ -348,6 +378,7 @@ class STCrossTransformer(nn.Module):
                  all_frames=16,
                  tubelet_size=2,
                  use_mean_pooling=True,
+                 reduce_position=[],
                  pretrained_cfg = None):
         super().__init__()
         self.num_classes = num_classes
@@ -377,7 +408,7 @@ class STCrossTransformer(nn.Module):
             Block(
                 dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
                 drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,
-                init_values=init_values)
+                init_values=init_values, num_layer=i, reduce_position=reduce_position)
             for i in range(depth)])
         
         self.clip_ln_post = nn.LayerNorm(embed_dim)
@@ -390,8 +421,6 @@ class STCrossTransformer(nn.Module):
 
         trunc_normal_(self.head.weight, std=.02)
         self.apply(self._init_weights)
-        
-        self.initialize_parameters(embed_dim, depth)
 
         self.head.weight.data.mul_(init_scale)
         self.head.bias.data.mul_(init_scale)
@@ -404,27 +433,13 @@ class STCrossTransformer(nn.Module):
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
-            
-    def initialize_parameters(self, embed_dim, depth):
-        proj_std = (embed_dim ** -0.5) * ((2 * depth) ** -0.5)
-        attn_std = embed_dim ** -0.5
-        fc_std = (2 * embed_dim) ** -0.5
-        for block in self.blocks:
-            
-            nn.init.normal_(block.s2t_cross.s2t_q.weight, std=attn_std)
-            nn.init.normal_(block.s2t_cross.s2t_kv.weight, std=attn_std)
-            nn.init.normal_(block.s2t_cross.proj.weight, std=proj_std)
-            
-            nn.init.normal_(block.t2s_cross.t2s_q.weight, std=attn_std)
-            nn.init.normal_(block.t2s_cross.t2s_kv.weight, std=attn_std)
-            nn.init.normal_(block.t2s_cross.t2s_proj.weight, std=proj_std)
 
     def get_num_layers(self):
         return len(self.blocks)
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        return {'patch_embed', 'cls_token', 'clip_conv1'}
+        return {'patch_embed', 'cls_token'}
 
     def get_classifier(self):
         return self.head
@@ -436,8 +451,8 @@ class STCrossTransformer(nn.Module):
     def reset_fcnorm(self):
         self.vmae_fc_norm = nn.LayerNorm(self.embed_dim)
 
-    def forward_features(self, s_x, t_x):
-        #s_x = rearrange(x, 'b c t h w -> (b t) c h w') 이건 잠시 module검증을 위해 center만 사용하자.
+    def forward_features(self, x):
+        s_x = rearrange(x, 'b c t h w -> (b t) c h w')
         s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
         s_x = s_x.reshape(s_x.shape[0], s_x.shape[1], -1) # [*, embeddim, grid**2]
         s_x = s_x.permute(0, 2, 1) # shape[batch, patchnum, embeddim]
@@ -445,7 +460,7 @@ class STCrossTransformer(nn.Module):
         s_x = s_x + self.clip_positional_embedding.to(s_x.dtype)
         s_x = self.clip_ln_pre(s_x)
         
-        t_x = self.patch_embed(t_x)
+        t_x = self.patch_embed(x)
         B, _, _ = t_x.size()
 
         if self.pos_embed is not None:
@@ -454,12 +469,9 @@ class STCrossTransformer(nn.Module):
 
         for blk in self.blocks:
             s_x, t_x = blk(s_x, t_x)
-            
-        # s_x = rearrange(s_x, '(b t) patch dim -> b t patch dim', t=16)
-        # s_x = s_x[:, :, 0, :] #cls token pick
-        # s_x = s_x.mean(1) #average pooling all frame
-        # s_x = self.clip_ln_post(s_x)
-        s_x = self.clip_ln_post(s_x[:, 0, :]) # cls token만 뽑는다.
+        
+        s_x = rearrange(s_x, '(b t) n d -> b t n d', t=16)
+        s_x = self.clip_ln_post(s_x[:, :, 0, :]).mean(1) # cls token만 뽑는다.
         t_x = self.vmae_fc_norm(t_x.mean(1)) # VideoMAE 최종적으로 normalize해주네.
         
         x = torch.cat([s_x, t_x], dim=1)
@@ -469,61 +481,18 @@ class STCrossTransformer(nn.Module):
         return x
 
 
-    def forward(self, s_x, t_x):
-        x = self.forward_features(s_x, t_x)
+    def forward(self, x):
+        x = self.forward_features(x)
         x = self.head(x)
         return x
 
 
 
 @register_model
-def bidir_cross_vit_small_patch16_224(pretrained=False, **kwargs):
-    model = STCrossTransformer(
-        patch_size=16, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
-    return model
-
-@register_model
-def bidir_cross_vit_base_patch16_224(pretrained=False, **kwargs):
+def bidir_vit_base_patch16_224(pretrained=False, **kwargs):
     model = STCrossTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+        norm_layer=partial(nn.LayerNorm, eps=1e-6), reduce_position=[2, 5, 8, 11], **kwargs)
     #model.default_cfg = _cfg()
     return model
 
-
-@register_model
-def bidir_cross_vit_base_patch16_384(pretrained=False, **kwargs):
-    model = STCrossTransformer(
-        img_size=384, patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
-    return model
-
-
-@register_model
-def bidir_cross_vit_large_patch16_224(pretrained=False, **kwargs):
-    model = STCrossTransformer(
-        patch_size=16, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
-    return model
-
-
-@register_model
-def bidir_cross_vit_large_patch16_384(pretrained=False, **kwargs):
-    model = STCrossTransformer(
-        img_size=384, patch_size=16, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
-    return model
-
-
-@register_model
-def bidir_cross_vit_large_patch16_512(pretrained=False, **kwargs):
-    model = STCrossTransformer(
-        img_size=512, patch_size=16, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    model.default_cfg = _cfg()
-    return model
