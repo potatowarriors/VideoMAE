@@ -160,7 +160,8 @@ class VisionTransformer(nn.Module):
 
         self.ln_post = LayerNorm(width)
         
-        
+    def get_num_layers(self):
+        return self.layers
 
     def forward(self, x: torch.Tensor):
         b = x.shape[0]
