@@ -59,17 +59,23 @@ class ReduceTemporalLayer(nn.Module):
             self.patch_num = (img_size // patch_size) ** 2 + 1 #cls token +1
         self.act = QuickGELU()
         self.max_pool = nn.MaxPool1d(kernel_size=2,stride=2,padding=0)
-        self.reduce = nn.Conv1d(self.embed_dim, self.embed_dim, kernel_size=(kernel_size[0]), stride=(stride[0]), padding=(pad_size[0]),groups=self.embed_dim)
-        self.temporal_posembed = nn.Parameter(torch.zeros(1, self.embed_dim, self.current_frame//2))
+        self.down = nn.Linear(self.embed_dim, self.embed_dim//2)
+        self.reduce = nn.Conv1d(self.embed_dim//2, self.embed_dim//2, kernel_size=(kernel_size[0]), stride=(stride[0]), padding=(pad_size[0]), groups=self.embed_dim//2)
+        self.up = nn.Linear(self.embed_dim//2, self.embed_dim)
+        self.temporal_posembed = nn.Parameter(torch.zeros(self.current_frame//2, self.embed_dim))
         
     def forward(self, x):
         if self.cls_split:
             cls_tok, x = cls_split(x) # x is patch token
+        x = self.down(x)
         x = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
         x = self.reduce(x)
         x = self.act(x)
-        x = x + self.temporal_posembed.to(x.dtype).view(1, self.embed_dim, self.current_frame//2)
         x = rearrange(x, '(b n) d t -> n (b t) d', n=self.patch_num)
+        x = self.up(x)
+        x = rearrange(x,'n (b t) d -> n b t d', t=self.current_frame//2)
+        x = x + self.temporal_posembed.to(x.dtype).view(1, 1, self.current_frame//2, self.embed_dim)
+        x = rearrange(x, 'n b t d -> n (b t) d')
         if self.cls_split:
             cls_tok = rearrange(cls_tok, 'n (b t) d -> (b n) d t', t=self.current_frame)
             cls_tok = self.max_pool(cls_tok)
@@ -179,7 +185,7 @@ class VisionTransformer(nn.Module):
         x = x.permute(1, 0, 2)  # LND -> NLD
         
         # if all_frame_setting:
-        #     x = rearrange(x, '(b t) n d -> b t n d', b=b)
+        #     x = rearrange(x, '(b t) n d -> b t n d', b=b) 
         #     x = x.mean(dim=1)
 
         x = self.ln_post(x[:, 0, :])
