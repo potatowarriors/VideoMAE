@@ -24,7 +24,7 @@ except ImportError:
 def get_num_layer_for_vit(var_name, num_max_layer):
     if var_name in ("cls_token", "mask_token", "pos_embed"):
         return 0
-    elif var_name in ("class_embedding", "positional_embedding", "temporal_posembed"):
+    elif var_name in ("visual.class_embedding", "visual.positional_embedding", "visual.temporal_posembed", "visual.ln_pre"):
         return 0
     elif var_name.startswith("patch_embed"):
         return 0

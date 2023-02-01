@@ -70,9 +70,8 @@ class ReduceTemporalLayer(nn.Module):
         x = self.down(x)
         x = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
         x = self.reduce(x)
-        x = self.act(x)
         x = rearrange(x, '(b n) d t -> n (b t) d', n=self.patch_num)
-        x = self.up(x)
+        x = self.up(self.act(x))
         x = rearrange(x,'n (b t) d -> n b t d', t=self.current_frame//2)
         x = x + self.temporal_posembed.to(x.dtype).view(1, 1, self.current_frame//2, self.embed_dim)
         x = rearrange(x, 'n b t d -> n (b t) d')
@@ -184,10 +183,6 @@ class VisionTransformer(nn.Module):
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
-        
-        # if all_frame_setting:
-        #     x = rearrange(x, '(b t) n d -> b t n d', b=b) 
-        #     x = x.mean(dim=1)
 
         x = self.ln_post(x[:, 0, :])
 
@@ -243,7 +238,7 @@ class CLIP(nn.Module):
         return self.layers
     
     def no_weight_decay(self):
-        return {'class_embedding', 'visual.positional_embedding', 'visual.temporal_posembed'}
+        return {'visual.class_embedding', 'visual.conv1.weight'}
 
     def initialize_parameters(self, m):
         if isinstance(m, nn.Linear):
