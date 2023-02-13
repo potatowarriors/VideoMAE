@@ -764,6 +764,18 @@ def freeze_block(model,block_list):
             else:
                 param.requires_grad = True
     return model, freeze_list
+
+def unfreeze_block(model, block_list):
+    unfreeze_list = []
+    for name, param in model.named_parameters():
+        for block in block_list:#if block in block_list
+            if block in name:
+                param.requires_grad = True
+                unfreeze_list.append(name)
+                break
+            else:
+                param.requires_grad = False
+    return model, unfreeze_list
                 
 def change_verification_mode(model, nb_classes):
     # freeze all parameters

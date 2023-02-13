@@ -249,6 +249,7 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
     
     def t2s_cross_attn(self, s_x, t_x):
         B, t_N, C = t_x.shape
+        s_x = rearrange(s_x, '(b t) n d -> b (n t) d', b=B) # batch -> token
         _, s_N, C = s_x.shape
         t2s_q_bias = self.t2s_q_bias
         t2s_kv_bias = torch.cat((torch.zeros_like(self.t2s_kv_bias, requires_grad=False), self.t2s_kv_bias))
@@ -266,6 +267,7 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         
         s_x = (t2s_attn @ t2s_v).transpose(1, 2).reshape(B, s_N, -1)
         s_x = self.t2s_proj(s_x)
+        s_x = rearrange(s_x, 'b (t n) d -> (b t) n d', t=16)
         return s_x
 
     def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
@@ -450,8 +452,8 @@ class STCrossTransformer(nn.Module):
         self.vmae_fc_norm = nn.LayerNorm(self.embed_dim)
 
     def forward_features(self, x):
-        idx_pool = [6, 7, 8, 9]
-        s_x = x[:, :, random.choice(idx_pool), :, :]
+        B = x.size(0)
+        s_x = rearrange(x, 'b c t h w -> (b t) c h w')
         s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
         s_x = s_x.reshape(s_x.shape[0], s_x.shape[1], -1) # [*, embeddim, grid**2]
         s_x = s_x.permute(0, 2, 1) # shape[batch, patchnum, embeddim]
@@ -461,7 +463,6 @@ class STCrossTransformer(nn.Module):
         s_x = s_x[:,1:,:] # remove cls token
         
         t_x = self.patch_embed(x)
-        B, _, _ = t_x.size()
 
         if self.pos_embed is not None:
             t_x = t_x + self.pos_embed.expand(B, -1, -1).type_as(t_x).to(t_x.device).clone().detach()
@@ -469,6 +470,8 @@ class STCrossTransformer(nn.Module):
 
         for blk in self.blocks:
             s_x, t_x = blk(s_x, t_x)
+        
+        s_x = rearrange(s_x, '(b t) n d -> b (t n) d', b=B)
         
         s_x = self.clip_ln_last(s_x.mean(1)) # all patch avg pooling
         t_x = self.vmae_fc_norm(t_x.mean(1)) # all patch avg pooling

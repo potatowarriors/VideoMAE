@@ -19,7 +19,7 @@ from util_tools.optim_factory import create_optimizer, get_parameter_groups, Lay
 
 from dataset.datasets import build_dataset
 from engine_for_onemodel import train_one_epoch, validation_one_epoch, final_test, merge
-from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, freeze_block
+from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, freeze_block, unfreeze_block
 from util_tools.utils import cross_multiple_samples_collate, notice_message
 import util_tools.utils as utils
 import clip_models.clip as clip
@@ -328,6 +328,9 @@ def main(args, ds_init):
       )
     
     load_bidir_weights(model, args)
+    
+    model, unfreeze_list = unfreeze_block(model, ['t2s','clip_ln_last','vmae_fc_norm','last_proj','head'])
+    print('unfreeze list :', unfreeze_list)
     
     model.to(device)
     
