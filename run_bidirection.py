@@ -85,13 +85,13 @@ def get_args():
                         help='num of steps to warmup LR, will overload warmup_epochs if set > 0')
 
     # Augmentation parameters
-    parser.add_argument('--color_jitter', type=float, default=0.4, metavar='PCT',
+    parser.add_argument('--color_jitter', type=float, default=0.8, metavar='PCT',
                         help='Color jitter factor (default: 0.4)')
     parser.add_argument('--num_sample', type=int, default=2,
                         help='Repeated_aug (default: 2)')
     parser.add_argument('--aa', type=str, default='rand-m7-n4-mstd0.5-inc1', metavar='NAME',
                         help='Use AutoAugment policy. "v0" or "original". " + "(default: rand-m7-n4-mstd0.5-inc1)'),
-    parser.add_argument('--smoothing', type=float, default=0.1,
+    parser.add_argument('--smoothing', type=float, default=0.2,
                         help='Label smoothing (default: 0.1)')
     parser.add_argument('--train_interpolation', type=str, default='bicubic',
                         help='Training interpolation (random, bilinear, bicubic default: "bicubic")')
@@ -113,9 +113,9 @@ def get_args():
                         help='Do not random erase first (clean) augmentation split')
 
     # Mixup params
-    parser.add_argument('--mixup', type=float, default=0.8,
+    parser.add_argument('--mixup', type=float, default=0.1,
                         help='mixup alpha, mixup enabled if > 0.')
-    parser.add_argument('--cutmix', type=float, default=1.0,
+    parser.add_argument('--cutmix', type=float, default=0.,
                         help='cutmix alpha, cutmix enabled if > 0.')
     parser.add_argument('--cutmix_minmax', type=float, nargs='+', default=None,
                         help='cutmix min/max ratio, overrides alpha and enables cutmix if set (default: None)')
