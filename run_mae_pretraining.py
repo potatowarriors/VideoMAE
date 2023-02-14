@@ -12,7 +12,7 @@ from util_tools.optim_factory import create_optimizer
 from dataset.datasets import build_pretraining_dataset
 from engine_for_pretraining import train_one_epoch
 from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler
-from util_tools.utils import utils
+import util_tools.utils as utils
 import videomae_models.modeling_pretrain as modeling_pretrain
 
 
