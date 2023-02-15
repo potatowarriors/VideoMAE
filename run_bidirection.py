@@ -329,7 +329,7 @@ def main(args, ds_init):
     
     load_bidir_weights(model, args)
     
-    model, unfreeze_list = unfreeze_block(model, ['t2s','clip_ln_last','vmae_fc_norm','last_proj','head'])
+    model, unfreeze_list = unfreeze_block(model, ['t2s', "s2t", 'clip_ln_last','vmae_fc_norm','last_proj','head'])
     print('unfreeze list :', unfreeze_list)
     
     model.to(device)

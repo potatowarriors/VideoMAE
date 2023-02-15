@@ -296,11 +296,10 @@ class Block(nn.Module):
                 self.spatial_posembed = get_sinusoid_encoding_table(1568, dim)
             else:
                 self.spatial_posembed = None
-          #self.reduce = ReduceTemporalLayer(current_frame=self.current_frame)
-        #   self.ln_s2t = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
-        #   self.s2t_cross = CrossAttentionS2T(
-        #        dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
-        #        attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
+            self.ln_s2t = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
+            self.s2t_cross = CrossAttentionS2T(
+               dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+               attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
             self.ln_t2s = norm_layer(dim)
             self.t2s_cross = CrossAttentionT2S(dim, num_heads)
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
@@ -336,7 +335,6 @@ class Block(nn.Module):
             t_x = t_x + self.drop_path(self.attn(self.norm1(t_x))) # VMAE space-time joint attention
             
             #s_x = rearrange(s_x, '(b t) n d -> b t n d', t=16) # cross attention을 위해 shape을 수정해준다. center frame만 쓰니까 잠시 꺼둔다.
-            #cls, patches = torch.split(s_x,[1, 196], dim=1)
             
             if self.cross is not None:
                 if self.spatial_posembed is not None:
@@ -344,13 +342,9 @@ class Block(nn.Module):
                     s_x = s_x + self.spatial_posembed.expand(B, -1, -1).type_as(s_x).to(s_x.device).clone().detach()
                     s_x = rearrange(s_x, 'b (t n) d -> (b t) n d', t=8)
                 injected_s_x = s_x + self.drop_path(self.t2s_cross(self.ln_t2s(s_x), t_x)) # temporal to spatial cross attn
-                
-                # cross attn 순서에 대한 ablation study를 해야 할까....?
-                #cls = cls + self.drop_path(self.t2s_cross(cls, t_x).unsqueeze(2)) # Cross attention time to space. 이건 잠시 검증을 위해 꺼둔다.
-                # injected_t_x = t_x + self.drop_path(self.s2t_cross(s_x, self.ln_s2t(t_x))) # Cross attention space to time
-                #s_x = torch.cat([cls, patches], dim=1) 
-                #s_x = rearrange(s_x, 'b t n d -> (b t) n d', t=16) center frame만 쓰니까 잠시 꺼둔다.
+                injected_t_x = t_x + self.drop_path(self.s2t_cross(s_x, self.ln_s2t(t_x))) # Cross attention space to time
                 s_x = injected_s_x
+                t_x = injected_t_x
             
             s_x = s_x + self.drop_path(self.clip_mlp(self.clip_ln_2(s_x))) # pass CLIP FFN
             t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x))) # pass VMAE FFN
