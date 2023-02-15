@@ -267,7 +267,7 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         
         s_x = (t2s_attn @ t2s_v).transpose(1, 2).reshape(B, s_N, -1)
         s_x = self.t2s_proj(s_x)
-        s_x = rearrange(s_x, 'b (t n) d -> (b t) n d', t=16)
+        s_x = rearrange(s_x, 'b (t n) d -> (b t) n d', t=8)
         return s_x
 
     def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
@@ -291,6 +291,10 @@ class Block(nn.Module):
         
         if num_layer in reduce_position:
             self.cross = True
+            if num_layer == reduce_position[0]:
+                self.spatial_posembed = get_sinusoid_encoding_table(1568, dim)
+            else:
+                self.spatial_posembed = None
           #self.reduce = ReduceTemporalLayer(current_frame=self.current_frame)
         #   self.ln_s2t = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
         #   self.s2t_cross = CrossAttentionS2T(
@@ -326,6 +330,7 @@ class Block(nn.Module):
 
     def forward(self,s_x, t_x):
         if self.gamma_1 is None:
+            B = t_x.shape[0]
             s_x = s_x + self.drop_path((self.clip_attention(self.clip_ln_1(s_x)))) # CLIP space attention
             t_x = t_x + self.drop_path(self.attn(self.norm1(t_x))) # VMAE space-time joint attention
             
@@ -333,6 +338,10 @@ class Block(nn.Module):
             #cls, patches = torch.split(s_x,[1, 196], dim=1)
             
             if self.cross is not None:
+                if self.spatial_posembed is not None:
+                    s_x = rearrange(s_x, '(b t) n d -> b (t n) d', b=B)
+                    s_x = s_x + self.spatial_posembed.expand(B, -1, -1).type_as(s_x).to(s_x.device).clone().detach()
+                    s_x = rearrange(s_x, 'b (t n) d -> (b t) n d', t=8)
                 injected_s_x = s_x + self.drop_path(self.t2s_cross(self.ln_t2s(s_x), t_x)) # temporal to spatial cross attn
                 
                 # cross attn 순서에 대한 ablation study를 해야 할까....?
@@ -453,7 +462,8 @@ class STCrossTransformer(nn.Module):
 
     def forward_features(self, x):
         B = x.size(0)
-        s_x = rearrange(x, 'b c t h w -> (b t) c h w')
+        s_x = x[:, :, 1::2, :, :]
+        s_x = rearrange(s_x, 'b c t h w -> (b t) c h w')
         s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
         s_x = s_x.reshape(s_x.shape[0], s_x.shape[1], -1) # [*, embeddim, grid**2]
         s_x = s_x.permute(0, 2, 1) # shape[batch, patchnum, embeddim]
@@ -496,6 +506,14 @@ def bidir_vit_base_patch16_224(pretrained=False, **kwargs):
     model = STCrossTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), reduce_position=[8, 9, 10, 11], **kwargs)
+    #model.default_cfg = _cfg()
+    return model
+
+@register_model
+def bidir_25811_vit_base_patch16_224(pretrained=False, **kwargs):
+    model = STCrossTransformer(
+        patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6), reduce_position=[2, 5, 8, 11], **kwargs)
     #model.default_cfg = _cfg()
     return model
 
