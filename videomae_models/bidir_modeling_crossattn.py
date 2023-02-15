@@ -281,24 +281,25 @@ class Block(nn.Module):
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm,attn_head_dim=None):
         super().__init__()
         self.cross = None
-        
-        if num_layer in reduce_position:
-            self.cross = True
-            self.ln_s2t = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
-            self.s2t_cross = CrossAttentionS2T(
-               dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
-               attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
-            self.ln_t2s = norm_layer(dim)
-            self.t2s_cross = CrossAttentionT2S(dim, num_heads)
-        # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
-        
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
-        
         self.clip_ln_1 = norm_layer(dim)
         self.clip_attn = nn.MultiheadAttention(dim, num_heads)
+        
+        if num_layer in reduce_position:
+            self.cross = True
+            self.alpha_s2t = nn.Parameter(torch.Tensor([0]))
+            self.ln_s2t = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
+            self.s2t_cross = CrossAttentionS2T(
+               dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+               attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
+            self.alpha_t2s = nn.Parameter(torch.Tensor([0]))
+            self.ln_t2s = norm_layer(dim)
+            self.t2s_cross = CrossAttentionT2S(dim, num_heads)
+            
+        # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         
         # Time path
@@ -327,16 +328,17 @@ class Block(nn.Module):
     def forward(self,s_x, t_x):
         if self.gamma_1 is None:
             if self.cross is not None:
+                a_s_x = self.clip_attention(self.clip_ln_1(s_x)) # CLIP space attention
+                a_t_x = self.attn(self.norm1(t_x)) # VMAE space-time joint attention
                 injected_s_x = s_x + self.drop_path(self.t2s_cross(self.ln_t2s(s_x), t_x)) # temporal to spatial cross attn
                 injected_t_x = t_x + self.drop_path(self.s2t_cross(s_x, self.ln_s2t(t_x))) # Cross attention space to time
-                s_x = injected_s_x
-                t_x = injected_t_x
-                
-            s_x = s_x + self.drop_path((self.clip_attention(self.clip_ln_1(s_x)))) # CLIP space attention
-            t_x = t_x + self.drop_path(self.attn(self.norm1(t_x))) # VMAE space-time joint attention
-            
-            s_x = s_x + self.drop_path(self.clip_mlp(self.clip_ln_2(s_x))) # pass CLIP FFN
-            t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x))) # pass VMAE FFN
+                s_x = s_x + a_s_x + self.alpha_s2t*injected_s_x
+                t_x = t_x + a_t_x + self.alpha_t2s*injected_t_x
+            else:           
+                s_x = s_x + (self.clip_attention(self.clip_ln_1(s_x))) # CLIP space attention
+                t_x = t_x + (self.attn(self.norm1(t_x))) # VMAE space-time joint attention
+                s_x = s_x + self.clip_mlp(self.clip_ln_2(s_x)) # pass CLIP FFN
+                t_x = t_x + self.mlp(self.norm2(t_x)) # pass VMAE FFN
             
         else: # gamma는 쓸일 없으니까 일단 구현하지말자.
             t_x = t_x + self.drop_path(self.gamma_1 * self.attn(self.norm1(t_x)))
