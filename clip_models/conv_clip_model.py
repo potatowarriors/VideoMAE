@@ -58,7 +58,7 @@ class ReduceTemporalLayer(nn.Module):
         else:
             self.patch_num = (img_size // patch_size) ** 2 + 1 #cls token +1
         self.act = QuickGELU()
-        self.max_pool = nn.MaxPool1d(kernel_size=2,stride=2,padding=0)
+        self.avg_pool = nn.AvgPool1d(kernel_size=2,stride=2,padding=0)
         self.down = nn.Linear(self.embed_dim, self.embed_dim//2)
         self.reduce = nn.Conv1d(self.embed_dim//2, self.embed_dim//2, kernel_size=(kernel_size[0]), stride=(stride[0]), padding=(pad_size[0]), groups=self.embed_dim//2)
         self.up = nn.Linear(self.embed_dim//2, self.embed_dim)
@@ -77,7 +77,7 @@ class ReduceTemporalLayer(nn.Module):
         x = rearrange(x, 'n b t d -> n (b t) d')
         if self.cls_split:
             cls_tok = rearrange(cls_tok, 'n (b t) d -> (b n) d t', t=self.current_frame)
-            cls_tok = self.max_pool(cls_tok)
+            cls_tok = self.avg_pool(cls_tok)
             cls_tok = rearrange(cls_tok, 'b d t -> (b t) d').unsqueeze(dim=0)
             x = torch.cat((cls_tok, x), dim = 0)
         return x
@@ -95,7 +95,7 @@ class ResidualAttentionBlock(nn.Module):
             pass
         else:
             self.current_frame = num_frames // (2 ** (reduce_position.index(layer_num)))
-            self.max_pool = nn.MaxPool1d(kernel_size=2, stride=2, padding= 0)
+            self.avg_pool = nn.AvgPool1d(kernel_size=2, stride=2, padding= 0)
             self.reduce = ReduceTemporalLayer(self.current_frame, cls_split, kernel_size, stride, pad_size)
         self.attn = nn.MultiheadAttention(d_model, n_head)
         self.ln_1 = LayerNorm(d_model)
@@ -116,7 +116,7 @@ class ResidualAttentionBlock(nn.Module):
         if self.current_frame is not None:
             b = x.shape[1] // self.current_frame
             x_half = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
-            x_half = self.max_pool(x_half)
+            x_half = self.avg_pool(x_half)
             x_half = rearrange(x_half, '(b n) d t -> n (b t) d', b=b)
             x = x_half + self.drop_path(self.reduce(x))
         x = x + self.drop_path(self.attention(self.ln_1(x)))
