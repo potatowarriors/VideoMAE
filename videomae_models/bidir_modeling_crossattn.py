@@ -292,6 +292,7 @@ class Block(nn.Module):
         if num_layer in reduce_position:
             self.cross = True
             if num_layer == reduce_position[0]:
+                print('activate sinusoidal position embed for clip!')
                 self.spatial_posembed = get_sinusoid_encoding_table(1568, dim)
             else:
                 self.spatial_posembed = None
