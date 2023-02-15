@@ -24,12 +24,21 @@ except ImportError:
 def get_num_layer_for_vit(var_name, num_max_layer):
     if var_name in ("cls_token", "mask_token", "pos_embed"):
         return 0
+    elif var_name in ("visual.class_embedding", "visual.positional_embedding", "visual.temporal_posembed", "visual.ln_pre"):
+        return 0
+    elif var_name in ("clip_class_embedding", "clip_ln_pre.weight","clip_ln_pre.bias", "clip_conv1.weight", "clip_conv1.bias", "clip_positional_embedding"):
+        return 0
     elif var_name.startswith("patch_embed"):
+        return 0
+    elif var_name.startswith("visual.conv1"):
         return 0
     elif var_name.startswith("rel_pos_bias"):
         return num_max_layer - 1
     elif var_name.startswith("blocks"):
         layer_id = int(var_name.split('.')[1])
+        return layer_id + 1
+    elif var_name.startswith("visual.transformer"):
+        layer_id = int(var_name.split('.')[3])
         return layer_id + 1
     else:
         return num_max_layer - 1

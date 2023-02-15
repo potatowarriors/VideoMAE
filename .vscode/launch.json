@@ -14,6 +14,7 @@
                "args" : [
                     "--nproc_per_node", "4",
                     "--master_port", "12330",
+<<<<<<< HEAD
                     "/data/jong980812/project/VideoMAE_experiments/run_class_finetuning.py",
                     "--data_set", "EGO4D_LTA",
                     "--pred_type", "verb",
@@ -25,15 +26,33 @@
                     "--log_dir", "/data/jong980812/project/VideoMAE_experiments/debug",
                     "--output_dir", "/data/jong980812/project/VideoMAE_experiments/debug",
                     "--batch_size", "10",
+=======
+                    "/data/kide004/repos/VideoMAE/run_bidirection.py",
+                    "--vmae_model", "bidir_vit_base_patch16_224",
+                    "--clip_frame", "all",
+                    "--data_set", "EPIC",
+                    "--pred_type", "noun",
+                    "--nb_classes", "300",
+                    "--data_path", "/local_datasets/Epickitchens100_clips/video",
+                    "--anno_path", "/data/kide004/repos/VideoMAE/dataset/epic",
+                    "--vmae_finetune", "/data/kide004/repos/VideoMAE/pre-trained/ssv2_pretrained.pth",
+                    "--clip_finetune", "/data/kide004/repos/VideoMAE/pre-trained/ViT-B-16.pt",
+                    "--log_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
+                    "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
+                    "--batch_size", "12",
+>>>>>>> fb98eacd3e4e674876ebf8a7f0c6d5f94b26afac
                     "--num_sample", "1",
                     "--epochs", "10",
                     "--save_ckpt_freq", "1",
                     "--input_size", "224",
                     "--short_side_size", "224",
                     "--num_frames", "16",
-                    "--num_sample", "1",
                     "--opt", "adamw",
+<<<<<<< HEAD
                     "--lr", "5e-4",
+=======
+                    "--lr", "0.01",
+>>>>>>> fb98eacd3e4e674876ebf8a7f0c6d5f94b26afac
                     "--opt_betas", "0.9","0.999",
                     "--weight_decay", "0.05",
                     "--test_num_segment", "2",

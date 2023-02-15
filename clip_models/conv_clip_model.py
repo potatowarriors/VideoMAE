@@ -45,39 +45,58 @@ class QuickGELU(nn.Module):
     
     
 class ReduceTemporalLayer(nn.Module):
-    def __init__(self, cls_split, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=3):
+    def __init__(self, current_frame, cls_split, kernel_size, stride, pad_size, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=3):
         super().__init__()
+        self.current_frame = current_frame
         self.cls_split = cls_split
+        self.img_size = img_size
         self.num_frames = num_frames
+        self.in_chans = in_chans
+        self.embed_dim = embed_dim
         if self.cls_split:
             self.patch_num = (img_size // patch_size) ** 2 #cls token +1
         else:
             self.patch_num = (img_size // patch_size) ** 2 + 1 #cls token +1
         self.act = QuickGELU()
-        self.downample = nn.Linear(embed_dim, embed_dim//2)
-        self.reduce = nn.Conv1d(embed_dim//2, embed_dim//2, kernel_size=tubelet_size, stride=1, padding=1, groups=embed_dim//2)
-        self.upsample = nn.Linear(embed_dim//2, embed_dim)
+        self.avg_pool = nn.AvgPool1d(kernel_size=2,stride=2,padding=0)
+        self.down = nn.Linear(self.embed_dim, self.embed_dim//2)
+        self.reduce = nn.Conv1d(self.embed_dim//2, self.embed_dim//2, kernel_size=(kernel_size[0]), stride=(stride[0]), padding=(pad_size[0]), groups=self.embed_dim//2)
+        self.up = nn.Linear(self.embed_dim//2, self.embed_dim)
+        self.temporal_posembed = nn.Parameter(torch.zeros(self.current_frame//2, self.embed_dim))
         
     def forward(self, x):
         if self.cls_split:
             cls_tok, x = cls_split(x) # x is patch token
-        x = self.downample(x)
-        x = rearrange(x, 'n (b t) d -> (b n) d t', t=self.num_frames)
+        x = self.down(x)
+        x = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
         x = self.reduce(x)
-        x = rearrange(x, '(b n) d t -> n (b t) d', n = self.patch_num)
-        x = self.upsample(self.act(x))
+        x = rearrange(x, '(b n) d t -> n (b t) d', n=self.patch_num)
+        x = self.up(self.act(x))
+        x = rearrange(x,'n (b t) d -> n b t d', t=self.current_frame//2)
+        x = x + self.temporal_posembed.to(x.dtype).view(1, 1, self.current_frame//2, self.embed_dim)
+        x = rearrange(x, 'n b t d -> n (b t) d')
         if self.cls_split:
+            cls_tok = rearrange(cls_tok, 'n (b t) d -> (b n) d t', t=self.current_frame)
+            cls_tok = self.avg_pool(cls_tok)
+            cls_tok = rearrange(cls_tok, 'b d t -> (b t) d').unsqueeze(dim=0)
             x = torch.cat((cls_tok, x), dim = 0)
-        
         return x
 
 
 class ResidualAttentionBlock(nn.Module):
-    def __init__(self, d_model: int, n_head: int, drop_path_rate, num_frames, layer_num, batch_size, cls_split, attn_mask: torch.Tensor = None):
+    def __init__(self, d_model: int, n_head: int, drop_path_rate, num_frames, layer_num, batch_size, cls_split, 
+                 reduce_position, kernel_size, stride, pad_size, attn_mask: torch.Tensor = None):
         super().__init__()
 
         self.layer_num = layer_num
-        self.reduce = ReduceTemporalLayer(cls_split)
+        self.current_frame = None
+        self.dim = d_model
+        if self.layer_num not in reduce_position:
+            pass
+        else:
+            self.current_frame = num_frames // (2 ** (reduce_position.index(layer_num)))
+            self.avg_pool = nn.AvgPool1d(kernel_size=2, stride=2, padding= 0)
+            self.reduce = ReduceTemporalLayer(self.current_frame, cls_split, kernel_size, stride, pad_size)
         self.attn = nn.MultiheadAttention(d_model, n_head)
         self.ln_1 = LayerNorm(d_model)
         self.mlp = nn.Sequential(OrderedDict([
@@ -94,20 +113,26 @@ class ResidualAttentionBlock(nn.Module):
         return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
     def forward(self, x):
-        x = x + self.reduce(x)
-        x = x + self.attention(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
+        if self.current_frame is not None:
+            b = x.shape[1] // self.current_frame
+            x_half = rearrange(x, 'n (b t) d -> (b n) d t', t=self.current_frame)
+            x_half = self.avg_pool(x_half)
+            x_half = rearrange(x_half, '(b n) d t -> n (b t) d', b=b)
+            x = x_half + self.drop_path(self.reduce(x))
+        x = x + self.drop_path(self.attention(self.ln_1(x)))
+        x = x + self.drop_path(self.mlp(self.ln_2(x)))
         return x
 
 
 class Transformer(nn.Module):
-    def __init__(self, width: int, layers: int, heads: int, drop_path_rate, num_frames, batch_size, cls_split,attn_mask: torch.Tensor = None):
+    def __init__(self, width: int, layers: int, heads: int, drop_path_rate, num_frames, batch_size, cls_split, 
+                 reduce_position, kernel_size:list, strdie:list, pad_size:list, attn_mask: torch.Tensor = None):
         super().__init__()
         self.width = width
         self.layers = layers
         self.drop_path_rate = drop_path_rate
         dpr = [x.item() for x in torch.linspace(0, self.drop_path_rate, self.layers)]
-        self.resblocks = nn.ModuleList([ResidualAttentionBlock(width, heads, dpr[i], num_frames, i, batch_size, cls_split, attn_mask) for i in range(layers)])
+        self.resblocks = nn.ModuleList([ResidualAttentionBlock(width, heads, dpr[i], num_frames, i, batch_size, cls_split, reduce_position, kernel_size, strdie, pad_size, attn_mask) for i in range(layers)])
 
     def forward(self, x: torch.Tensor):
         for blk in self.resblocks:
@@ -116,7 +141,8 @@ class Transformer(nn.Module):
 
 
 class VisionTransformer(nn.Module):
-    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, drop_path_rate: float, num_frames: int, batch_size: int, cls_split:bool):
+    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, drop_path_rate: float, num_frames: int, batch_size: int, cls_split:bool,
+                 reduce_position:list, kernel_size:list, stride:list, pad_size:list):
         super().__init__()
         self.layers = layers
         self.input_resolution = input_resolution
@@ -129,11 +155,12 @@ class VisionTransformer(nn.Module):
         self.ln_pre = LayerNorm(width)
         self.temporal_posembed = nn.Parameter(torch.zeros([num_frames, width]))
 
-        self.transformer = Transformer(width, layers, heads, drop_path_rate, num_frames, batch_size, cls_split)
+        self.transformer = Transformer(width, layers, heads, drop_path_rate, num_frames, batch_size, cls_split, reduce_position, kernel_size, stride, pad_size)
 
         self.ln_post = LayerNorm(width)
         
-        
+    def get_num_layers(self):
+        return self.layers
 
     def forward(self, x: torch.Tensor):
         b = x.shape[0]
@@ -146,19 +173,16 @@ class VisionTransformer(nn.Module):
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
         x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
         x = x + self.positional_embedding.to(x.dtype)
+        
         x = self.ln_pre(x)
         if all_frame_setting:
             x = rearrange(x, '(b t) n d -> b t n d', b=b)
             x = x + self.temporal_posembed.to(x.dtype).view(1, t, 1, self.embed_dim)
             x = rearrange(x, 'b t n d -> (b t) n d')
-
+        
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
-        
-        if all_frame_setting:
-            x = rearrange(x, '(b t) n d -> b t n d', b=b)
-            x = x.mean(dim=1)
 
         x = self.ln_post(x[:, 0, :])
 
@@ -175,7 +199,12 @@ class CLIP(nn.Module):
                  drop_path,
                  num_frames,
                  batch_size,
-                 cls_split : bool
+                 cls_split : bool,
+                 reduce_position :list,
+                 kernel_size : list,
+                 stride : list,
+                 pad_size : list,
+                 
                  ):
         super().__init__()
 
@@ -193,7 +222,11 @@ class CLIP(nn.Module):
             drop_path_rate=self.drop_path_rate,
             num_frames = self.num_frames,
             batch_size=self.batch_size,
-            cls_split = cls_split
+            cls_split = cls_split,
+            reduce_position = reduce_position,
+            kernel_size = kernel_size,
+            stride = stride,
+            pad_size = pad_size
             )
         
         
@@ -205,7 +238,7 @@ class CLIP(nn.Module):
         return self.layers
     
     def no_weight_decay(self):
-        return {}
+        return {'visual.class_embedding', 'visual.conv1.weight'}
 
     def initialize_parameters(self, m):
         if isinstance(m, nn.Linear):
@@ -279,10 +312,15 @@ def build_model(state_dict: dict, args):
     drop_path = args.drop_path
     batch_size = args.batch_size
     cls_split = args.cls_split
+    reduce_position = args.reduce_position
+    kernel_size = args.kernel_size
+    stride = args.stride
+    pad_size = args.pad_size
 
 
     model = CLIP(
-        image_resolution, vision_layers, vision_width, vision_patch_size, num_classes, drop_path, num_frames, batch_size, cls_split
+        image_resolution, vision_layers, vision_width, vision_patch_size, num_classes, drop_path, num_frames, batch_size, cls_split,
+        reduce_position, kernel_size, stride, pad_size
     )
 
     for key in ["input_resolution", "context_length", "vocab_size"]:
