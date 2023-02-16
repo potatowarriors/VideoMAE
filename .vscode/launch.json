@@ -39,8 +39,12 @@
                     "--clip_finetune", "/data/kide004/repos/VideoMAE/pre-trained/ViT-B-16.pt",
                     "--log_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
                     "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
+<<<<<<< HEAD
                     "--batch_size", "12",
 >>>>>>> fb98eacd3e4e674876ebf8a7f0c6d5f94b26afac
+=======
+                    "--batch_size", "10",
+>>>>>>> 296ed0f58328ed876c96d9b3b061109d16c3c3f6
                     "--num_sample", "1",
                     "--epochs", "10",
                     "--save_ckpt_freq", "1",
