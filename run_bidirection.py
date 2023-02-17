@@ -19,11 +19,12 @@ from util_tools.optim_factory import create_optimizer, get_parameter_groups, Lay
 
 from dataset.datasets import build_dataset
 from engine_for_onemodel import train_one_epoch, validation_one_epoch, final_test, merge
-from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, freeze_block, unfreeze_block
+from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, freeze_block, unfreeze_block, read_alpha, focal_loss
 from util_tools.utils import cross_multiple_samples_collate, notice_message
 import util_tools.utils as utils
 import clip_models.clip as clip
 import videomae_models.bidir_modeling_crossattn
+from focal_loss.focal_loss import FocalLoss
 
 
 def get_args():
@@ -54,6 +55,8 @@ def get_args():
     parser.add_argument('--model_ema_force_cpu', action='store_true', default=False, help='')
 
     # Optimizer parameters
+    parser.add_argument('--focal_loss_gamma', default=None, type=float,
+                        help='focal loss gamma')
     parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
                         help='Optimizer (default: "adamw"')
     parser.add_argument('--opt_eps', default=1e-8, type=float, metavar='EPSILON',
@@ -407,7 +410,10 @@ def main(args, ds_init):
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
-    if mixup_fn is not None:
+    if args.focal_loss_gamma is not None:
+        alpha = read_alpha('/data/kide004/repos/VideoMAE/dataset/epic/epic_class_dist.csv')
+        criterion = focal_loss(alpha=alpha, gamma=args.focal_loss_gamma)
+    elif mixup_fn is not None:
         # smoothing is handled with mixup label transform
         criterion = SoftTargetCrossEntropy()
     elif args.smoothing > 0.:

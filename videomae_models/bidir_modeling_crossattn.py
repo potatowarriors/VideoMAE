@@ -330,10 +330,10 @@ class Block(nn.Module):
             if self.cross is not None:
                 a_s_x = self.clip_attention(self.clip_ln_1(s_x)) # CLIP space attention
                 a_t_x = self.attn(self.norm1(t_x)) # VMAE space-time joint attention
-                injected_s_x = s_x + self.drop_path(self.t2s_cross(self.ln_t2s(s_x), t_x)) # temporal to spatial cross attn
-                injected_t_x = t_x + self.drop_path(self.s2t_cross(s_x, self.ln_s2t(t_x))) # Cross attention space to time
-                s_x = s_x + a_s_x + self.alpha_s2t*injected_s_x
-                t_x = t_x + a_t_x + self.alpha_t2s*injected_t_x
+                injected_s_x = (self.t2s_cross(self.ln_t2s(a_s_x), self.ln_s2t(a_t_x))) # temporal to spatial cross attn
+                injected_t_x = (self.s2t_cross(self.ln_t2s(a_s_x), self.ln_s2t(a_t_x))) # Cross attention space to time
+                s_x = s_x + self.drop_path(a_s_x) + self.drop_path(self.alpha_s2t * injected_s_x)
+                t_x = t_x + self.drop_path(a_t_x) + self.drop_path(self.alpha_t2s * injected_t_x)
             else:           
                 s_x = s_x + (self.clip_attention(self.clip_ln_1(s_x))) # CLIP space attention
                 t_x = t_x + (self.attn(self.norm1(t_x))) # VMAE space-time joint attention
