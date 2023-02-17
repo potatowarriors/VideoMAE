@@ -551,7 +551,22 @@ def main(args, ds_init):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
-
+    if args.slack_api is not None:
+        if global_rank == 0 and args.slack_api:
+            Token = args.slack_api # 자신의 Token 입력
+            job_name=os.environ["SLURM_JOB_NAME"]
+            cluster=os.environ["SLURM_SUBMIT_HOST"]
+            job_time=total_time_str
+            attach_dict = {
+            'color' : '#ff0000',
+            'author_name' : 'Job Finish',
+            'title' : job_name,
+            'text' : cluster,
+            }
+            attach_list=[attach_dict] 
+            contents=f"Training time is {job_time}\nTop 1 Accuracy is {final_top1}"
+            notice_message(Token, "#notice-job", contents, attach_list)
+        
 
 if __name__ == '__main__':
     opts, ds_init = get_args()

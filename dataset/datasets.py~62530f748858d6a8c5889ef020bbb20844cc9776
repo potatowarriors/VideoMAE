@@ -176,8 +176,9 @@ def build_dataset(is_train, test_mode, args):
             new_height=256,
             new_width=320,
             args=args)
+        nb_classes = 300
         if args.pred_type == 'verb':
-            nb_classes = 97
+           nb_classes = 97
         elif args.pred_type == 'noun':
             nb_classes = 300
         elif args.pred_type == 'action':
@@ -210,10 +211,10 @@ def build_dataset(is_train, test_mode, args):
             new_height=256,
             new_width=320,
             args=args)
-        if args.pred_type == 'verb':
-            nb_classes = 115
-        elif args.pred_type == 'noun':
-            nb_classes = 478
+        nb_classes = 478 if args.EGO4D_task == "noun" else 115
+        
+
+
     elif args.data_set == 'UCF101':
         mode = None
         anno_path = None

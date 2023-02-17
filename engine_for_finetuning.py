@@ -7,7 +7,10 @@ import torch
 from util_tools.mixup import Mixup
 from timm.utils import accuracy, ModelEma
 import util_tools.utils as utils
+<<<<<<< HEAD
 
+=======
+>>>>>>> 5ff3cb0fd15ce56d418ac20034656f7b144a54db
 from scipy.special import softmax
 
 
