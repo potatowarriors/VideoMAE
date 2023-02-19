@@ -290,12 +290,10 @@ class Block(nn.Module):
         
         if num_layer in reduce_position:
             self.cross = True
-            self.alpha_s2t = nn.Parameter(torch.Tensor([0]))
             self.ln_s2t = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
             self.s2t_cross = CrossAttentionS2T(
                dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
                attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
-            self.alpha_t2s = nn.Parameter(torch.Tensor([0]))
             self.ln_t2s = norm_layer(dim)
             self.t2s_cross = CrossAttentionT2S(dim, num_heads)
             
@@ -332,8 +330,8 @@ class Block(nn.Module):
                 a_t_x = self.attn(self.norm1(t_x)) # VMAE space-time joint attention
                 injected_s_x = (self.t2s_cross(self.ln_t2s(a_s_x), self.ln_s2t(a_t_x))) # temporal to spatial cross attn
                 injected_t_x = (self.s2t_cross(self.ln_t2s(a_s_x), self.ln_s2t(a_t_x))) # Cross attention space to time
-                s_x = s_x + self.drop_path(a_s_x) + self.drop_path(self.alpha_s2t * injected_s_x)
-                t_x = t_x + self.drop_path(a_t_x) + self.drop_path(self.alpha_t2s * injected_t_x)
+                s_x = s_x + self.drop_path(a_s_x) + self.drop_path(injected_s_x)
+                t_x = t_x + self.drop_path(a_t_x) + self.drop_path(injected_t_x)
                 s_x = s_x + self.clip_mlp(self.clip_ln_2(s_x))
                 t_x = t_x + self.mlp(self.norm2(t_x))
             else:           
@@ -410,8 +408,7 @@ class STCrossTransformer(nn.Module):
         self.clip_ln_last = nn.LayerNorm(embed_dim)
         self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
         self.vmae_fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
-        self.last_proj = nn.Linear(embed_dim*2, embed_dim *2)
-        self.head = nn.Linear(embed_dim*2, num_classes) if num_classes > 0 else nn.Identity()
+        self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
         if use_learnable_pos_emb:
             trunc_normal_(self.pos_embed, std=.02)
@@ -474,8 +471,7 @@ class STCrossTransformer(nn.Module):
         s_x = self.clip_ln_last(s_x.mean(1)) # all patch avg pooling
         t_x = self.vmae_fc_norm(t_x.mean(1)) # all patch avg pooling
         
-        x = torch.cat([s_x, t_x], dim=1)
-        x = self.last_proj(x)
+        x = torch.stack([s_x, t_x], dim=2).mean(2)
         
         # x = (s_x + t_x) / 2 # CLIP output과 VMAE output을 average해준다.
         
@@ -493,7 +489,7 @@ class STCrossTransformer(nn.Module):
 def bidir_vit_base_patch16_224(pretrained=False, **kwargs):
     model = STCrossTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), reduce_position=[8, 9, 10, 11], **kwargs)
+        norm_layer=partial(nn.LayerNorm, eps=1e-6), reduce_position=[0,1,2,3,4,5,6,7,8, 9, 10, 11], **kwargs)
     #model.default_cfg = _cfg()
     return model
 
