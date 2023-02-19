@@ -6,7 +6,7 @@
     "type": "Adam",
     "adam_w_mode": true,
     "params": {
-      "lr": 0.01,
+      "lr": 0.0005,
       "weight_decay": 0.05,
       "bias_correction": true,
       "betas": [

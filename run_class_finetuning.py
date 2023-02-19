@@ -19,7 +19,7 @@ from util_tools.optim_factory import create_optimizer, get_parameter_groups, Lay
 from dataset.datasets import build_dataset
 from engine_for_finetuning import train_one_epoch, validation_one_epoch, final_test, merge
 from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler
-from util_tools.utils import  multiple_samples_collate
+from util_tools.utils import  multiple_samples_collate,notice_message
 from util_tools import utils
 import videomae_models.modeling_finetune
 
