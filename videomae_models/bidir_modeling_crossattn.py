@@ -267,7 +267,6 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         
         s_x = (t2s_attn @ t2s_v).transpose(1, 2).reshape(B, s_N, -1)
         s_x = self.t2s_proj(s_x)
-        s_x = rearrange(s_x, 'b (t n) d -> (b t) n d', t=8)
         return s_x
 
     def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
@@ -287,15 +286,6 @@ class Block(nn.Module):
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
         self.clip_ln_1 = norm_layer(dim)
         self.clip_attn = nn.MultiheadAttention(dim, num_heads)
-        
-        if num_layer in reduce_position:
-            self.cross = True
-            self.ln_s2t = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
-            self.s2t_cross = CrossAttentionS2T(
-               dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
-               attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
-            self.ln_t2s = norm_layer(dim)
-            self.t2s_cross = CrossAttentionT2S(dim, num_heads)
             
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -324,26 +314,57 @@ class Block(nn.Module):
         return self.clip_attn(x, x, x, need_weights=False, attn_mask=None)[0]
 
     def forward(self,s_x, t_x):
-        if self.gamma_1 is None:
-            if self.cross is not None:
-                a_s_x = self.clip_attention(self.clip_ln_1(s_x)) # CLIP space attention
-                a_t_x = self.attn(self.norm1(t_x)) # VMAE space-time joint attention
-                injected_s_x = (self.t2s_cross(self.ln_t2s(a_s_x), self.ln_s2t(a_t_x))) # temporal to spatial cross attn
-                injected_t_x = (self.s2t_cross(self.ln_t2s(a_s_x), self.ln_s2t(a_t_x))) # Cross attention space to time
-                s_x = s_x + self.drop_path(a_s_x) + self.drop_path(injected_s_x)
-                t_x = t_x + self.drop_path(a_t_x) + self.drop_path(injected_t_x)
-                s_x = s_x + self.clip_mlp(self.clip_ln_2(s_x))
-                t_x = t_x + self.mlp(self.norm2(t_x))
-            else:           
-                s_x = s_x + (self.clip_attention(self.clip_ln_1(s_x))) # CLIP space attention
-                t_x = t_x + (self.attn(self.norm1(t_x))) # VMAE space-time joint attention
-                s_x = s_x + self.clip_mlp(self.clip_ln_2(s_x)) # pass CLIP FFN
-                t_x = t_x + self.mlp(self.norm2(t_x)) # pass VMAE FFN
+        if self.gamma_1 is None:     
+            s_x = s_x + (self.clip_attention(self.clip_ln_1(s_x))) # CLIP space attention
+            s_x = s_x + self.clip_mlp(self.clip_ln_2(s_x)) # pass CLIP FFN
+            
+            t_x = t_x + (self.attn(self.norm1(t_x))) # VMAE space-time joint attention
+            t_x = t_x + self.mlp(self.norm2(t_x)) # pass VMAE FFN
             
         else: # gamma는 쓸일 없으니까 일단 구현하지말자.
             t_x = t_x + self.drop_path(self.gamma_1 * self.attn(self.norm1(t_x)))
             t_x = t_x + self.drop_path(self.gamma_2 * self.cross(s_x, self.norm2(t_x)))
             t_x = t_x + self.drop_path(self.gamma_3 * self.mlp(self.norm3(t_x)))
+        return s_x, t_x
+    
+class CrossBlock(nn.Module):
+    
+    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
+                 drop_path=0., init_values=None, num_layer=0, act_layer=nn.GELU, norm_layer=nn.LayerNorm,attn_head_dim=None):
+        super().__init__()
+        self.spatial_norm1 = norm_layer(dim)
+        self.spatial_attn = Attention(
+            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop,
+            proj_drop=drop,attn_head_dim=attn_head_dim
+        )
+        self.temporal_norm1 = norm_layer(dim)
+        self.temporal_attn = Attention(
+            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop,
+            proj_drop=drop,attn_head_dim=attn_head_dim
+        )
+        self.ln_s2t = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
+        self.s2t_cross = CrossAttentionS2T(
+            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+            attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
+        self.ln_t2s = norm_layer(dim)
+        self.t2s_cross = CrossAttentionT2S(dim, num_heads)
+        self.spatial_norm2 = norm_layer(dim)
+        self.spatial_mlp = Mlp(in_features=dim, hidden_features=dim*mlp_ratio, act_layer=act_layer, drop=drop)
+        self.temporal_norm2 = norm_layer(dim)
+        self.temporal_mlp = Mlp(in_features=dim, hidden_features=dim*mlp_ratio, act_layer=act_layer, drop=drop)
+    
+    def forward(self, s_x, t_x):
+        # forward spatial
+        a_s_x = self.spatial_attn(self.spatial_norm1(s_x))
+        injected_s_x = self.t2s_cross(self.ln_t2s(s_x), self.ln_s2t(t_x))
+        s_x = s_x + a_s_x + injected_s_x
+        s_x = s_x + self.spatial_mlp(self.spatial_norm2(s_x))
+        # forward temporal
+        a_t_x = self.temporal_attn(self.temporal_norm1(t_x))
+        injected_t_x = self.s2t_cross(self.ln_t2s(s_x), self.ln_s2t(t_x))
+        t_x = t_x + a_t_x + injected_t_x
+        t_x = t_x + self.temporal_mlp(self.temporal_norm2(t_x))
+        
         return s_x, t_x
       
       
@@ -405,10 +426,18 @@ class STCrossTransformer(nn.Module):
                 init_values=init_values, num_layer=i, reduce_position=reduce_position)
             for i in range(depth)])
         
+        self.cross_blocks = nn.ModuleList([
+            CrossBlock(
+                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,
+                init_values=init_values, num_layer=i)
+            for i in range(2)])
+        
         self.clip_ln_last = nn.LayerNorm(embed_dim)
         self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
         self.vmae_fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
-        self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+        self.last_proj = nn.Linear(embed_dim*2, embed_dim *2)
+        self.head = nn.Linear(embed_dim*2, num_classes) if num_classes > 0 else nn.Identity()
 
         if use_learnable_pos_emb:
             trunc_normal_(self.pos_embed, std=.02)
@@ -468,10 +497,14 @@ class STCrossTransformer(nn.Module):
         
         s_x = rearrange(s_x, '(b t) n d -> b (t n) d', b=B)
         
+        for blk in self.cross_blocks: # adding new layer
+            s_x, t_x = blk(s_x, t_x)
+        
         s_x = self.clip_ln_last(s_x.mean(1)) # all patch avg pooling
         t_x = self.vmae_fc_norm(t_x.mean(1)) # all patch avg pooling
         
-        x = torch.stack([s_x, t_x], dim=2).mean(2)
+        x = torch.cat([s_x, t_x], dim=1)
+        x = self.last_proj(x)
         
         # x = (s_x + t_x) / 2 # CLIP output과 VMAE output을 average해준다.
         
@@ -489,7 +522,7 @@ class STCrossTransformer(nn.Module):
 def bidir_vit_base_patch16_224(pretrained=False, **kwargs):
     model = STCrossTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), reduce_position=[0,1,2,3,4,5,6,7,8, 9, 10, 11], **kwargs)
+        norm_layer=partial(nn.LayerNorm, eps=1e-6), reduce_position=[8, 9, 10, 11], **kwargs)
     #model.default_cfg = _cfg()
     return model
 
