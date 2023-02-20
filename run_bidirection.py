@@ -20,7 +20,7 @@ from util_tools.optim_factory import create_optimizer, get_parameter_groups, Lay
 from dataset.datasets import build_dataset
 from engine_for_onemodel import train_one_epoch, validation_one_epoch, final_test, merge
 from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, freeze_block, unfreeze_block, read_alpha, focal_loss
-from util_tools.utils import cross_multiple_samples_collate, notice_message
+from util_tools.utils import cross_multiple_samples_collate, notice_message, laod_eval_weights
 import util_tools.utils as utils
 import clip_models.clip as clip
 import videomae_models.bidir_modeling_crossattn
@@ -132,6 +132,7 @@ def get_args():
     # Finetuning params
     parser.add_argument('--vmae_finetune', default='', help='finetune from checkpoint')
     parser.add_argument('--clip_finetune',default='', help='finetune from clip checkpoint')
+    parser.add_argument('--fine_tune', default=None, help='finetune from bidir model')
     parser.add_argument('--model_key', default='model|module', type=str)
     parser.add_argument('--model_prefix', default='', type=str)
     parser.add_argument('--init_scale', default=0.001, type=float)
@@ -330,9 +331,12 @@ def main(args, ds_init):
           init_scale=args.init_scale,
       )
     
-    load_bidir_weights(model, args)
+    if args.fine_tune is not None:
+        laod_eval_weights(model, args.fine_tune, args)
+    else:
+        load_bidir_weights(model, args)
     
-    model, unfreeze_list = unfreeze_block(model, ['t2s', "s2t", 'clip_ln_last','vmae_fc_norm','last_proj','head'])
+    model, unfreeze_list = unfreeze_block(model, ['t2s', "s2t", 'clip_ln_last','cross_blocks','vmae_fc_norm','last_proj','head'])
     print('unfreeze list :', unfreeze_list)
     
     model.to(device)
@@ -430,7 +434,7 @@ def main(args, ds_init):
 
     if args.eval:
         preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
-        test_stats = final_test(data_loader_test, model, device, preds_file)
+        test_stats = final_test(args, data_loader_test, model, device, preds_file)
         torch.distributed.barrier()
         if global_rank == 0:
             print("Start merging results...")
