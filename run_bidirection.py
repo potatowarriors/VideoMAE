@@ -24,7 +24,6 @@ from util_tools.utils import cross_multiple_samples_collate, notice_message
 import util_tools.utils as utils
 import clip_models.clip as clip
 import videomae_models.bidir_modeling_crossattn
-from focal_loss.focal_loss import FocalLoss
 
 
 def get_args():
@@ -332,7 +331,7 @@ def main(args, ds_init):
     
     load_bidir_weights(model, args)
     
-    model, unfreeze_list = unfreeze_block(model, ['t2s', "s2t", 'clip_ln_last','vmae_fc_norm','last_proj','head'])
+    model, unfreeze_list = unfreeze_block(model, ['t2s', "s2t", 'clip_ln_last','cross_blocks','vmae_fc_norm','last_proj','head'])
     print('unfreeze list :', unfreeze_list)
     
     model.to(device)
