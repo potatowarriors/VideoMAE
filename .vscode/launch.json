@@ -24,7 +24,6 @@
                     "--anno_path", "/data/kide004/repos/VideoMAE/dataset/epic",
                     "--vmae_finetune", "/data/kide004/repos/VideoMAE/pre-trained/ssv2_pretrained.pth",
                     "--clip_finetune", "/data/kide004/repos/VideoMAE/pre-trained/ViT-B-16.pt",
-                    "--fine_tune", "/data/kide004/repos/VideoMAE/train_sh/epic_bidir/fiber_allposition/5e-4/OUT/checkpoint-best/mp_rank_00_model_states.pt",
                     "--log_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
                     "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
                     "--batch_size", "4",
@@ -41,7 +40,7 @@
                     "--test_num_segment", "2",
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
-                    "--eval",
+                    "--dist_eval",
                ]
           }
      ]

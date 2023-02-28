@@ -32,6 +32,26 @@ class DropPath(nn.Module):
     
     def extra_repr(self) -> str:
         return 'p={}'.format(self.drop_prob)
+    
+class Adapter(nn.Module):
+    def __init__(self, dim, mlp_ratio=0.25, act_layer=nn.GELU, skip_connect=True):
+        super().__init__()
+        self.skip_connect = skip_connect
+        down_dim = int(dim * mlp_ratio)
+        self.act = act_layer()
+        self.D_fc1 = nn.Linear(dim, down_dim)
+        self.D_fc2 = nn.Linear(down_dim, dim)
+        
+    def forward(self, x):
+        # x is (BT, HW+1, D)
+        xs = self.D_fc1(x)
+        xs = self.act(xs)
+        xs = self.D_fc2(xs)
+        if self.skip_connect:
+            x = x + xs
+        else:
+            x = xs
+        return x
 
 class QuickGELU(nn.Module):
     def forward(self, x: torch.Tensor):
@@ -92,29 +112,6 @@ class Mlp(nn.Module):
         # commit this for the orignal BERT implement 
         x = self.fc2(x)
         x = self.drop(x)
-        return x
-   
-
-class ReduceTemporalLayer(nn.Module):
-    def __init__(self, current_frame, img_size=224, patch_size=16, in_chans=3, embed_dim=768, num_frames=16, tubelet_size=3):
-        super().__init__()
-        self.current_frame = current_frame
-        self.img_size = img_size
-        self.num_frames = num_frames
-        self.in_chans = in_chans
-        self.embed_dim = embed_dim
-        self.act = QuickGELU()
-        self.max_pool = nn.MaxPool1d(kernel_size=2,stride=2,padding=0)
-        self.reduce = nn.Conv1d(self.embed_dim, self.embed_dim, kernel_size=2, stride=2, padding=0,groups=self.embed_dim)
-        
-    def forward(self, x):
-        b = x.shape[0] // self.current_frame
-        x = rearrange(x, '(b t) n d -> (b n) d t', t=self.current_frame)
-        temp_x = self.max_pool(x)
-        x = self.reduce(x)
-        x = self.act(x)
-        x = temp_x + x
-        x = rearrange(x, '(b n) d t -> (b t) n d', b=b)
         return x
 
 # 기존 weight load편의성을 위해 Attention이름을 유지한다.
@@ -284,9 +281,11 @@ class Block(nn.Module):
         self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
+        self.T_attn_adapter = Adapter(dim)
         self.clip_ln_1 = norm_layer(dim)
         self.clip_attn = nn.MultiheadAttention(dim, num_heads)
-            
+        self.S_attn_adapter = Adapter(dim)
+        
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         
@@ -294,6 +293,7 @@ class Block(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.T_mlp_adapter = Adapter(dim, skip_connect=False)
         
         # Space path
         self.clip_ln_2 = norm_layer(dim)
@@ -302,6 +302,7 @@ class Block(nn.Module):
             ("gelu", QuickGELU()),
             ("c_proj", nn.Linear(dim * 4, dim))
         ]))
+        self.S_mlp_adapter = Adapter(dim, skip_connect=False)
 
         if init_values > 0:
             self.gamma_1 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
@@ -315,11 +316,13 @@ class Block(nn.Module):
 
     def forward(self,s_x, t_x):
         if self.gamma_1 is None:     
-            s_x = s_x + (self.clip_attention(self.clip_ln_1(s_x))) # CLIP space attention
-            s_x = s_x + self.clip_mlp(self.clip_ln_2(s_x)) # pass CLIP FFN
+            s_x = s_x + self.S_attn_adapter((self.clip_attention(self.clip_ln_1(s_x)))) # CLIP space attention
+            s_x = self.clip_ln_2(s_x)
+            s_x = s_x + self.clip_mlp(s_x) + self.drop_path(0.5 * self.S_mlp_adapter(s_x)) # pass CLIP FFN
             
-            t_x = t_x + (self.attn(self.norm1(t_x))) # VMAE space-time joint attention
-            t_x = t_x + self.mlp(self.norm2(t_x)) # pass VMAE FFN
+            t_x = t_x + self.T_attn_adapter((self.attn(self.norm1(t_x)))) # VMAE space-time joint attention
+            t_x = self.norm2(t_x)
+            t_x = t_x + self.mlp(t_x) + self.drop_path(0.5 * self.T_mlp_adapter(t_x)) # pass VMAE FFN
             
         else: # gamma는 쓸일 없으니까 일단 구현하지말자.
             t_x = t_x + self.drop_path(self.gamma_1 * self.attn(self.norm1(t_x)))
@@ -327,8 +330,8 @@ class Block(nn.Module):
             t_x = t_x + self.drop_path(self.gamma_3 * self.mlp(self.norm3(t_x)))
         return s_x, t_x
     
-class CrossBlock(nn.Module):
     
+class CrossBlock(nn.Module):
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
                  drop_path=0., init_values=None, num_layer=0, act_layer=nn.GELU, norm_layer=nn.LayerNorm,attn_head_dim=None):
         super().__init__()
@@ -426,13 +429,6 @@ class STCrossTransformer(nn.Module):
                 init_values=init_values, num_layer=i, reduce_position=reduce_position)
             for i in range(depth)])
         
-        self.cross_blocks = nn.ModuleList([
-            CrossBlock(
-                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,
-                init_values=init_values, num_layer=i)
-            for i in range(2)])
-        
         self.clip_ln_last = nn.LayerNorm(embed_dim)
         self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
         self.vmae_fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
@@ -444,6 +440,7 @@ class STCrossTransformer(nn.Module):
 
         trunc_normal_(self.head.weight, std=.02)
         self.apply(self._init_weights)
+        self._init_adpater_weight()
 
         self.head.weight.data.mul_(init_scale)
         self.head.bias.data.mul_(init_scale)
@@ -456,13 +453,23 @@ class STCrossTransformer(nn.Module):
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
+            
+    def _init_adpater_weight(self):
+        for n, m in self.blocks.named_modules():
+            if 'adapter' in n:
+                for n2, m2 in m.named_modules():
+                    if 'D_fc2' in n2:
+                        if isinstance(m2, nn.Linear):
+                            nn.init.constant_(m2.weight, 0)
+                            nn.init.constant_(m2.bias, 0)
+        
 
     def get_num_layers(self):
         return len(self.blocks)
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        return {'clip_class_embedding', 'clip_positional_embedding', 'cls_token'}
+        return {'clip_positional_embedding',}
 
     def get_classifier(self):
         return self.head
@@ -484,23 +491,19 @@ class STCrossTransformer(nn.Module):
         s_x = torch.cat([self.clip_class_embedding.to(s_x.dtype) + torch.zeros(s_x.shape[0], 1, s_x.shape[-1], dtype=s_x.dtype, device=s_x.device), s_x], dim=1)
         s_x = s_x + self.clip_positional_embedding.to(s_x.dtype)
         s_x = self.clip_ln_pre(s_x)
-        s_x = s_x[:,1:,:] # remove cls token
         
         t_x = self.patch_embed(x)
 
         if self.pos_embed is not None:
             t_x = t_x + self.pos_embed.expand(B, -1, -1).type_as(t_x).to(t_x.device).clone().detach()
         t_x = self.pos_drop(t_x)
-
+        
+        s_x = rearrange(s_x,'b l d -> l b d') # (b t) l d -> l (b t) d
         for blk in self.blocks:
             s_x, t_x = blk(s_x, t_x)
+        s_x = rearrange(s_x,'l (b t) d -> b t l d', b=B)
         
-        s_x = rearrange(s_x, '(b t) n d -> b (t n) d', b=B)
-        
-        for blk in self.cross_blocks: # adding new layer
-            s_x, t_x = blk(s_x, t_x)
-        
-        s_x = self.clip_ln_last(s_x.mean(1)) # all patch avg pooling
+        s_x = self.clip_ln_last(s_x[:,:,0,:].mean(1)) # all patch avg pooling
         t_x = self.vmae_fc_norm(t_x.mean(1)) # all patch avg pooling
         
         x = torch.cat([s_x, t_x], dim=1)
