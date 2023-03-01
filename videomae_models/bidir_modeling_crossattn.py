@@ -191,8 +191,9 @@ class CrossAttentionS2T(nn.Module):
 
     def forward(self, s_x, t_x):
         B, t_N, C = t_x.shape
-        s_x = rearrange(s_x, '(b t) n d -> b (t n) d', b=B)
-        _, s_N, C = s_x.shape
+        s_x = rearrange(s_x, 'n (b t) d -> b t n d', b=B)
+        s_x_cls = s_x[:,:,0,:] # pick cls token
+        _, s_N, C = s_x_cls.shape
         s2t_q_bias = None
         s2t_kv_bias = None
         if self.s2t_q_bias is not None:
@@ -204,7 +205,7 @@ class CrossAttentionS2T(nn.Module):
         s2t_q = F.linear(input=t_x, weight=self.s2t_q.weight, bias=s2t_q_bias)
         s2t_q = s2t_q.reshape(B, t_N, self.num_heads, -1).permute(0, 2, 1, 3)
         # s2t_kv = spatial input
-        s2t_kv = F.linear(input=s_x, weight=self.s2t_kv.weight, bias=s2t_kv_bias)
+        s2t_kv = F.linear(input=s_x_cls, weight=self.s2t_kv.weight, bias=s2t_kv_bias)
         s2t_kv = s2t_kv.reshape(B, s_N, 2, self.num_heads, -1).permute(2, 0, 3, 1, 4)
         s2t_q, s2t_k, s2t_v = s2t_q, s2t_kv[0], s2t_kv[1]   # make torchscript happy (cannot use tensor as tuple)
 
@@ -246,12 +247,15 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
     
     def t2s_cross_attn(self, s_x, t_x):
         B, t_N, C = t_x.shape
-        s_x = rearrange(s_x, '(b t) n d -> b (n t) d', b=B) # batch -> token
-        _, s_N, C = s_x.shape
+        s_x = rearrange(s_x, 'n (b t) d -> b t n d', b=B) # batch -> token
+        init_cls = s_x[:,:,0,:]
+        s_x_cls = s_x[:,:,0,:]
+        s_x = s_x[:,:,1:,:]
+        _, s_N, C = s_x_cls.shape
         t2s_q_bias = self.t2s_q_bias
         t2s_kv_bias = torch.cat((torch.zeros_like(self.t2s_kv_bias, requires_grad=False), self.t2s_kv_bias))
         
-        t2s_q = F.linear(input=s_x, weight=self.t2s_q.weight, bias=t2s_q_bias)
+        t2s_q = F.linear(input=s_x_cls, weight=self.t2s_q.weight, bias=t2s_q_bias)
         t2s_q = t2s_q.reshape(B, s_N, self.num_head, -1).permute(0, 2, 1, 3)
         t2s_kv = F.linear(input=t_x, weight=self.t2s_kv.weight, bias=t2s_kv_bias)
         t2s_kv = t2s_kv.reshape(B, t_N, 2, self.num_head, -1).permute(2, 0, 3, 1, 4)
@@ -262,8 +266,10 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         
         t2s_attn = t2s_attn.softmax(dim=-1)
         
-        s_x = (t2s_attn @ t2s_v).transpose(1, 2).reshape(B, s_N, -1)
-        s_x = self.t2s_proj(s_x)
+        s_x_cls = (t2s_attn @ t2s_v).transpose(1, 2).reshape(B, s_N, -1)
+        s_x_cls = self.t2s_proj(s_x_cls)
+        s_x = torch.cat((init_cls.unsqueeze(2) + s_x_cls.unsqueeze(2), s_x), 2)
+        s_x = rearrange(s_x,'b t n d -> n (b t) d')
         return s_x
 
     def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
@@ -277,17 +283,35 @@ class Block(nn.Module):
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm,attn_head_dim=None):
         super().__init__()
         self.cross = None
+        
+        # time path
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
         self.T_attn_adapter = Adapter(dim)
+        
+        # space path
         self.clip_ln_1 = norm_layer(dim)
         self.clip_attn = nn.MultiheadAttention(dim, num_heads)
         self.S_attn_adapter = Adapter(dim)
         
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        
+        #t2s layer
+        self.ln_cross_spatial = norm_layer(dim)
+        self.t2s_adapter_in = Adapter(dim, skip_connect=False)
+        self.t2s_cross = CrossAttentionT2S(dim, num_heads)
+        self.t2s_adapter_out = Adapter(dim, skip_connect=False)
+        
+        #t2s layer
+        self.ln_cross_temporal = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
+        self.s2t_adapter_in = Adapter(dim, skip_connect=False)
+        self.s2t_cross = CrossAttentionS2T(
+            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+            attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
+        self.s2t_adapter_out = Adapter(dim, skip_connect=False)
         
         # Time path
         self.norm2 = norm_layer(dim)
@@ -315,12 +339,25 @@ class Block(nn.Module):
         return self.clip_attn(x, x, x, need_weights=False, attn_mask=None)[0]
 
     def forward(self,s_x, t_x):
-        if self.gamma_1 is None:     
-            s_x = s_x + self.S_attn_adapter((self.clip_attention(self.clip_ln_1(s_x)))) # CLIP space attention
+        if self.gamma_1 is None:
+            # s_x = [n b d], t_x =[b n d]     
+            s_x = s_x + self.S_attn_adapter((self.clip_attention(self.clip_ln_1(s_x)))) # n b d
+            t_x = t_x + self.T_attn_adapter((self.attn(self.norm1(t_x)))) # b n d
+            
+            s_x = self.ln_cross_spatial(s_x) # n b d
+            t_x = self.ln_cross_temporal(t_x) # b n d
+            
+            cross_s_x = self.t2s_adapter_in(s_x) # n b d
+            cross_t_x = self.s2t_adapter_in(t_x) # b n d
+            
+            cross_s_x = self.drop_path(self.t2s_adapter_out(self.t2s_cross(cross_s_x, cross_t_x))) # n b d
+            cross_t_x = self.drop_path(self.s2t_adapter_out(self.s2t_cross(cross_s_x, cross_t_x))) # b n d
+            
+            s_x = s_x + self.drop_path(cross_s_x)
+            t_x = t_x + self.drop_path(cross_t_x)
+            
             s_x = self.clip_ln_2(s_x)
             s_x = s_x + self.clip_mlp(s_x) + self.drop_path(0.5 * self.S_mlp_adapter(s_x)) # pass CLIP FFN
-            
-            t_x = t_x + self.T_attn_adapter((self.attn(self.norm1(t_x)))) # VMAE space-time joint attention
             t_x = self.norm2(t_x)
             t_x = t_x + self.mlp(t_x) + self.drop_path(0.5 * self.T_mlp_adapter(t_x)) # pass VMAE FFN
             
@@ -410,6 +447,7 @@ class STCrossTransformer(nn.Module):
         self.clip_conv1 = nn.Conv2d(in_channels=3, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size, bias=False)
         self.clip_class_embedding = nn.Parameter(scale * torch.randn(embed_dim))
         self.clip_positional_embedding = nn.Parameter(scale * torch.randn((img_size // patch_size) ** 2 + 1, embed_dim))
+        self.clip_temporal_embedding = nn.Parameter(torch.zeros(1, 8, embed_dim))
         self.clip_ln_pre = nn.LayerNorm(embed_dim)
 
         if use_learnable_pos_emb:
@@ -430,10 +468,10 @@ class STCrossTransformer(nn.Module):
             for i in range(depth)])
         
         self.clip_ln_last = nn.LayerNorm(embed_dim)
-        self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
-        self.vmae_fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
-        self.last_proj = nn.Linear(embed_dim*2, embed_dim *2)
-        self.head = nn.Linear(embed_dim*2, num_classes) if num_classes > 0 else nn.Identity()
+        # self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
+        # self.vmae_fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
+        # self.last_proj = nn.Linear(embed_dim*2, embed_dim *2)
+        self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
         if use_learnable_pos_emb:
             trunc_normal_(self.pos_embed, std=.02)
@@ -490,6 +528,10 @@ class STCrossTransformer(nn.Module):
         s_x = s_x.permute(0, 2, 1) # shape[batch, patchnum, embeddim]
         s_x = torch.cat([self.clip_class_embedding.to(s_x.dtype) + torch.zeros(s_x.shape[0], 1, s_x.shape[-1], dtype=s_x.dtype, device=s_x.device), s_x], dim=1)
         s_x = s_x + self.clip_positional_embedding.to(s_x.dtype)
+        n = s_x.shape[1]
+        s_x = rearrange(s_x, '(b t) n d -> (b n) t d', t=8)
+        s_x = s_x + self.clip_temporal_embedding
+        s_x = rearrange(s_x, '(b n) t d -> (b t) n d', n=n)
         s_x = self.clip_ln_pre(s_x)
         
         t_x = self.patch_embed(x)
@@ -498,20 +540,20 @@ class STCrossTransformer(nn.Module):
             t_x = t_x + self.pos_embed.expand(B, -1, -1).type_as(t_x).to(t_x.device).clone().detach()
         t_x = self.pos_drop(t_x)
         
-        s_x = rearrange(s_x,'b l d -> l b d') # (b t) l d -> l (b t) d
+        s_x = rearrange(s_x,'b n d -> n b d') # (b t) l d -> l (b t) d
         for blk in self.blocks:
             s_x, t_x = blk(s_x, t_x)
-        s_x = rearrange(s_x,'l (b t) d -> b t l d', b=B)
+        s_x = rearrange(s_x,'n (b t) d -> b t n d', b=B)
         
         s_x = self.clip_ln_last(s_x[:,:,0,:].mean(1)) # all patch avg pooling
-        t_x = self.vmae_fc_norm(t_x.mean(1)) # all patch avg pooling
+        # t_x = self.vmae_fc_norm(t_x.mean(1)) # all patch avg pooling
         
-        x = torch.cat([s_x, t_x], dim=1)
-        x = self.last_proj(x)
+        # x = torch.cat([s_x, t_x], dim=1)
+        # x = self.last_proj(x)
         
         # x = (s_x + t_x) / 2 # CLIP output과 VMAE output을 average해준다.
         
-        return x
+        return s_x
 
 
     def forward(self, x):
