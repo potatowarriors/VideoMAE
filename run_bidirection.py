@@ -24,7 +24,6 @@ from util_tools.utils import cross_multiple_samples_collate, notice_message, lao
 import util_tools.utils as utils
 import clip_models.clip as clip
 import videomae_models.bidir_modeling_crossattn
-from focal_loss.focal_loss import FocalLoss
 
 
 def get_args():
