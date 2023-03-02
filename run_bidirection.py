@@ -335,7 +335,7 @@ def main(args, ds_init):
     else:
         load_bidir_weights(model, args)
     
-    model, unfreeze_list = unfreeze_block(model, ['clip_class_embedding', 'cross', 'clip_temporal_embedding', 'adapter', 'last', 'vmae_fc_norm','last_proj','head'])
+    model, unfreeze_list = unfreeze_block(model, ['cross', 'clip_temporal_embedding', 'adapter', 'last', 'vmae_fc_norm','last_proj','head'])
     print('unfreeze list :', unfreeze_list)
     
     model.to(device)

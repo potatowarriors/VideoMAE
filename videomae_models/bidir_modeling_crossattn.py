@@ -292,9 +292,9 @@ class Block(nn.Module):
         # self.T_attn_adapter = Adapter(dim)
         
         ##################deivide temporal attention part#####################
-        self.T_adapter_in = Adapter(dim, skip_connect=False)
+        # self.T_adapter_in = Adapter(dim, skip_connect=False)
         self.time_attn = nn.MultiheadAttention(dim, num_heads)
-        self.T_adatper_out = Adapter(dim, skip_connect=False)
+        self.T_adapter_out = Adapter(dim, skip_connect=False)
         
         # space path
         self.clip_ln_1 = norm_layer(dim)
@@ -351,7 +351,7 @@ class Block(nn.Module):
             n, bt, d = s_x.shape
             ###############temporal attention####################
             s_x_temp = rearrange(s_x, 'n (b t) d -> t (b n) d', t=8)
-            s_x_temp = self.T_adatper_out(self.temp_attention(self.T_adapter_in(self.clip_ln_1(s_x_temp))))
+            s_x_temp = self.T_adapter_out(self.temp_attention(self.clip_ln_1(s_x_temp)))
             s_x_temp = rearrange(s_x_temp, 't (b n) d -> n (b t) d', n=n)
             
             s_x = s_x + drop_path(s_x_temp)
@@ -384,48 +384,6 @@ class Block(nn.Module):
             t_x = t_x + self.drop_path(self.gamma_2 * self.cross(s_x, self.norm2(t_x)))
             t_x = t_x + self.drop_path(self.gamma_3 * self.mlp(self.norm3(t_x)))
         return s_x
-    
-    
-class CrossBlock(nn.Module):
-    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., init_values=None, num_layer=0, act_layer=nn.GELU, norm_layer=nn.LayerNorm,attn_head_dim=None):
-        super().__init__()
-        self.spatial_norm1 = norm_layer(dim)
-        self.spatial_attn = Attention(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop,
-            proj_drop=drop,attn_head_dim=attn_head_dim
-        )
-        self.temporal_norm1 = norm_layer(dim)
-        self.temporal_attn = Attention(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop,
-            proj_drop=drop,attn_head_dim=attn_head_dim
-        )
-        self.ln_s2t = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
-        self.s2t_cross = CrossAttentionS2T(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
-            attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
-        self.ln_t2s = norm_layer(dim)
-        self.t2s_cross = CrossAttentionT2S(dim, num_heads)
-        self.spatial_norm2 = norm_layer(dim)
-        self.spatial_mlp = Mlp(in_features=dim, hidden_features=dim*mlp_ratio, act_layer=act_layer, drop=drop)
-        self.temporal_norm2 = norm_layer(dim)
-        self.temporal_mlp = Mlp(in_features=dim, hidden_features=dim*mlp_ratio, act_layer=act_layer, drop=drop)
-    
-    def forward(self, s_x, t_x):
-        # forward spatial
-        a_s_x = self.spatial_attn(self.spatial_norm1(s_x))
-        injected_s_x = self.t2s_cross(self.ln_t2s(s_x), self.ln_s2t(t_x))
-        s_x = s_x + a_s_x + injected_s_x
-        s_x = s_x + self.spatial_mlp(self.spatial_norm2(s_x))
-        # forward temporal
-        a_t_x = self.temporal_attn(self.temporal_norm1(t_x))
-        injected_t_x = self.s2t_cross(self.ln_t2s(s_x), self.ln_s2t(t_x))
-        t_x = t_x + a_t_x + injected_t_x
-        t_x = t_x + self.temporal_mlp(self.temporal_norm2(t_x))
-        
-        return s_x, t_x
-      
-      
     
 class STCrossTransformer(nn.Module):
     """ Vision Transformer with support for patch or hybrid CNN input stage
