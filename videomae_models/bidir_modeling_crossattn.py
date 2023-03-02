@@ -283,6 +283,7 @@ class Block(nn.Module):
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm,attn_head_dim=None):
         super().__init__()
         self.cross = None
+        self.num_layer = num_layer
         
         # time path
         self.norm1 = norm_layer(dim)
@@ -299,19 +300,20 @@ class Block(nn.Module):
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         
-        #t2s layer
-        self.ln_cross_spatial = norm_layer(dim)
-        self.t2s_adapter_in = Adapter(dim, skip_connect=False)
-        self.t2s_cross = CrossAttentionT2S(dim, num_heads)
-        self.t2s_adapter_out = Adapter(dim, skip_connect=False)
-        
-        #t2s layer
-        self.ln_cross_temporal = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
-        self.s2t_adapter_in = Adapter(dim, skip_connect=False)
-        self.s2t_cross = CrossAttentionS2T(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
-            attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
-        self.s2t_adapter_out = Adapter(dim, skip_connect=False)
+        if num_layer == 0:
+            #t2s layer
+            self.ln_cross_spatial = norm_layer(dim)
+            self.t2s_adapter_in = Adapter(dim, skip_connect=False)
+            self.t2s_cross = CrossAttentionT2S(dim, num_heads)
+            self.t2s_adapter_out = Adapter(dim, skip_connect=False)
+
+        # #t2s layer
+            self.ln_cross_temporal = norm_layer(dim) # 이건 cross attn 전용 layer norm으로 변경해야 한다.
+            self.s2t_adapter_in = Adapter(dim, skip_connect=False)
+        # self.s2t_cross = CrossAttentionS2T(
+        #     dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
+        #     attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
+        # self.s2t_adapter_out = Adapter(dim, skip_connect=False)
         
         # Time path
         self.norm2 = norm_layer(dim)
@@ -344,17 +346,18 @@ class Block(nn.Module):
             s_x = s_x + self.S_attn_adapter((self.clip_attention(self.clip_ln_1(s_x)))) # n b d
             t_x = t_x + self.T_attn_adapter((self.attn(self.norm1(t_x)))) # b n d
             
-            s_x = self.ln_cross_spatial(s_x) # n b d
-            t_x = self.ln_cross_temporal(t_x) # b n d
-            
-            cross_s_x = self.t2s_adapter_in(s_x) # n b d
-            cross_t_x = self.s2t_adapter_in(t_x) # b n d
-            
-            cross_s_x = self.drop_path(self.t2s_adapter_out(self.t2s_cross(cross_s_x, cross_t_x))) # n b d
-            cross_t_x = self.drop_path(self.s2t_adapter_out(self.s2t_cross(cross_s_x, cross_t_x))) # b n d
-            
-            s_x = s_x + self.drop_path(cross_s_x)
-            t_x = t_x + self.drop_path(cross_t_x)
+            if self.num_layer == 0:
+                s_x = self.ln_cross_spatial(s_x) # n b d
+                t_x = self.ln_cross_temporal(t_x) # b n d
+                
+                cross_s_x = self.t2s_adapter_in(s_x) # n b d
+                cross_t_x = self.s2t_adapter_in(t_x) # b n d
+                
+                cross_s_x = self.drop_path(self.t2s_adapter_out(self.t2s_cross(cross_s_x, cross_t_x))) # n b d
+                # cross_t_x = self.drop_path(self.s2t_adapter_out(self.s2t_cross(cross_s_x, cross_t_x))) # b n d
+                
+                s_x = s_x + self.drop_path(cross_s_x)
+                # t_x = t_x + self.drop_path(cross_t_x)
             
             s_x = self.clip_ln_2(s_x)
             s_x = s_x + self.clip_mlp(s_x) + self.drop_path(0.5 * self.S_mlp_adapter(s_x)) # pass CLIP FFN
