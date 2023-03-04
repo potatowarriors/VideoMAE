@@ -295,16 +295,15 @@ class Block(nn.Module):
         self.num_tadapter = 1
         self.num_heads = num_heads
         self.scale = 0.5
-        self.num_frames = 8
         mlp_hidden_dim = int(dim * mlp_ratio)
         
         ###################################### MHSA code #####################################
         ############################ AIM MHSA + AIM Ddvide Time MHSA ###########################
-        # self.clip_ln_1 = LayerNorm(dim)
-        # self.time_attn = nn.MultiheadAttention(dim, num_heads)
-        # self.T_Adapter = Adapter(dim, skip_connect=False)
-        # self.clip_attn = nn.MultiheadAttention(dim, num_heads)
-        # self.S_Adapter = Adapter(dim)
+        self.clip_ln_1 = LayerNorm(dim)
+        self.time_attn = nn.MultiheadAttention(dim, num_heads)
+        self.ST_Adapter = Adapter(dim, skip_connect=False)
+        self.clip_attn = nn.MultiheadAttention(dim, num_heads)
+        self.S_Adapter = Adapter(dim)
         ##################################################################
         
         ############################ VMAE MHSA ###########################
@@ -319,14 +318,14 @@ class Block(nn.Module):
         
         ###################################### FFN code #########################################
         ############################ AIM FFN ###############################
-        # self.clip_ln_2 = LayerNorm(dim)
-        # self.clip_mlp = nn.Sequential(OrderedDict([
-        #     ("c_fc", nn.Linear(dim, dim * 4)),
-        #     ("gelu", QuickGELU()),
-        #     ("c_proj", nn.Linear(dim * 4, dim))
-        # ]))
-        # self.S_MLP_Adapter = Adapter(dim, skip_connect=False)
-        # self.attn_mask = None
+        self.clip_ln_2 = LayerNorm(dim)
+        self.clip_mlp = nn.Sequential(OrderedDict([
+            ("c_fc", nn.Linear(dim, dim * 4)),
+            ("gelu", QuickGELU()),
+            ("c_proj", nn.Linear(dim * 4, dim))
+        ]))
+        self.S_MLP_Adapter = Adapter(dim, skip_connect=False)
+        self.attn_mask = None
         #####################################################################
         
         ############################ VMAE FFN ###############################
@@ -345,29 +344,32 @@ class Block(nn.Module):
     def time_attention(self, x:torch.Tensor):
         return self.time_attn(x,x,x,need_weights=False,attn_mask=None)[0]
 
-    def forward(self, t_x):
+    def forward(self,s_x, t_x):
+        B = t_x.shape(0)
+        n, bt, _ = s_x.shape
+        num_frames = bt//B
         ############################ MHSA Forward #############################
-        # # AIM Time MHSA
-        # xt = rearrange(s_x, 'n (b t) d -> t (b n) d', t=self.num_frames)
-        # xt = self.T_Adapter(self.time_attention(self.clip_ln_1(xt)))
-        # xt = rearrange(xt, 't (b n) d -> n (b t) d', n=n)
-        # s_x = s_x + self.drop_path(xt) # skip connection original + time attention result
-        # # AIM Space MHSA
-        # s_x = s_x + self.S_Adapter(self.attention(self.clip_ln_1(s_x))) # original space multi head self attention
+        # AIM Time MHSA
+        s_xt = rearrange(s_x, 'n (b t) d -> t (b n) d', t=num_frames)
+        s_xt = self.ST_Adapter(self.time_attention(self.clip_ln_1(s_xt)))
+        s_xt = rearrange(s_xt, 't (b n) d -> n (b t) d', n=n)
+        s_x = s_x + self.drop_path(s_xt) # skip connection original + time attention result
+        # AIM Space MHSA
+        s_x = s_x + self.S_Adapter(self.attention(self.clip_ln_1(s_x))) # original space multi head self attention
         # VMAE Time MHSA
         t_x = t_x + self.T_Adapter(self.attn(self.norm1(t_x)))
         ########################################################################
         
         
         ############################ FFN Forward ##################################
-        # s_xn = self.clip_ln_2(s_x)
-        # s_x = s_x + self.clip_mlp(s_xn) + self.drop_path(self.scale * self.S_MLP_Adapter(s_xn))
+        s_xn = self.clip_ln_2(s_x)
+        s_x = s_x + self.clip_mlp(s_xn) + self.drop_path(self.scale * self.S_MLP_Adapter(s_xn))
         
         t_xn = self.norm2(t_x)
         t_x = t_x + self.mlp(t_xn) + self.drop_path(self.scale * self.T_MLP_Adapter(t_xn))
         ############################################################################
         
-        return t_x
+        return s_x, t_x
     
 class STCrossTransformer(nn.Module):
     """ Vision Transformer with support for patch or hybrid CNN input stage
@@ -393,22 +395,23 @@ class STCrossTransformer(nn.Module):
                  all_frames=16,
                  tubelet_size=2,
                  use_mean_pooling=True,
-                 reduce_position=[],
+                 composition=False,
                  pretrained_cfg = None):
         super().__init__()
         self.num_classes = num_classes
         self.embed_dim = embed_dim  # num_features for consistency with other models
         self.tubelet_size = tubelet_size
+        self.composition = composition
         self.patch_embed = PatchEmbed(
             img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim, num_frames=all_frames, tubelet_size=self.tubelet_size)
         num_patches = self.patch_embed.num_patches
         
         scale = embed_dim ** -0.5
-        # self.clip_conv1 = nn.Conv2d(in_channels=3, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size, bias=False)
-        # self.clip_class_embedding = nn.Parameter(scale * torch.randn(embed_dim))
-        # self.clip_positional_embedding = nn.Parameter(scale * torch.randn((img_size // patch_size) ** 2 + 1, embed_dim))
-        # self.clip_temporal_embedding = nn.Parameter(torch.zeros(1, 8, embed_dim))
-        # self.clip_ln_pre = LayerNorm(embed_dim)
+        self.clip_conv1 = nn.Conv2d(in_channels=3, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size, bias=False)
+        self.clip_class_embedding = nn.Parameter(scale * torch.randn(embed_dim))
+        self.clip_positional_embedding = nn.Parameter(scale * torch.randn((img_size // patch_size) ** 2 + 1, embed_dim))
+        self.clip_temporal_embedding = nn.Parameter(torch.zeros(1, 8, embed_dim))
+        self.clip_ln_pre = LayerNorm(embed_dim)
 
         if use_learnable_pos_emb:
             self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
@@ -427,20 +430,33 @@ class STCrossTransformer(nn.Module):
                 init_values=init_values, num_layer=i)
             for i in range(depth)])
         
-        # self.clip_ln_post = LayerNorm(embed_dim)
+        self.clip_ln_post = LayerNorm(embed_dim)
         self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
         self.vmae_fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
-        self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+        
+        if self.composition:
+            self.head_verb = nn.Linear(embed_dim, 97)
+            self.head_noun = nn.Linear(embed_dim, 300)
+        else:
+            self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
         if use_learnable_pos_emb:
             trunc_normal_(self.pos_embed, std=.02)
 
-        trunc_normal_(self.head.weight, std=.02)
         self.apply(self._init_weights)
         self._init_adpater_weight()
-
-        self.head.weight.data.mul_(init_scale)
-        self.head.bias.data.mul_(init_scale)
+        
+        if self.composition:
+            trunc_normal_(self.head_noun.weight, std=.02)
+            trunc_normal_(self.head_verb.weight, std=.02)
+            self.head_verb.weight.data.mul_(init_scale)
+            self.head_verb.bias.data.mul_(init_scale)
+            self.head_noun.weight.data.mul_(init_scale)
+            self.head_noun.bias.data.mul_(init_scale)
+        else:
+            trunc_normal_(self.head.weight, std=.02)
+            self.head.weight.data.mul_(init_scale)
+            self.head.bias.data.mul_(init_scale)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -480,21 +496,19 @@ class STCrossTransformer(nn.Module):
 
     def forward_features(self, x):
         B = x.size(0)
-        # s_x = x[:, :, 1::2, :, :]
-        t_x = x
+        s_x, t_x = x
         ######################## AIM spatial path #########################
-        # s_x = x
-        # s_x = rearrange(s_x, 'b c t h w -> (b t) c h w')
-        # s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
-        # s_x = s_x.reshape(s_x.shape[0], s_x.shape[1], -1) # [*, embeddim, grid**2]
-        # s_x = s_x.permute(0, 2, 1) # shape[batch, patchnum, embeddim]
-        # s_x = torch.cat([self.clip_class_embedding.to(s_x.dtype) + torch.zeros(s_x.shape[0], 1, s_x.shape[-1], dtype=s_x.dtype, device=s_x.device), s_x], dim=1)
-        # s_x = s_x + self.clip_positional_embedding.to(s_x.dtype)
-        # n = s_x.shape[1]
-        # s_x = rearrange(s_x, '(b t) n d -> (b n) t d', t=8)
-        # s_x = s_x + self.clip_temporal_embedding
-        # s_x = rearrange(s_x, '(b n) t d -> (b t) n d', n=n)
-        # s_x = self.clip_ln_pre(s_x)
+        s_x = rearrange(s_x, 'b c t h w -> (b t) c h w')
+        s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
+        s_x = s_x.reshape(s_x.shape[0], s_x.shape[1], -1) # [*, embeddim, grid**2]
+        s_x = s_x.permute(0, 2, 1) # shape[batch, patchnum, embeddim]
+        s_x = torch.cat([self.clip_class_embedding.to(s_x.dtype) + torch.zeros(s_x.shape[0], 1, s_x.shape[-1], dtype=s_x.dtype, device=s_x.device), s_x], dim=1)
+        s_x = s_x + self.clip_positional_embedding.to(s_x.dtype)
+        n = s_x.shape[1]
+        s_x = rearrange(s_x, '(b t) n d -> (b n) t d', t=8)
+        s_x = s_x + self.clip_temporal_embedding
+        s_x = rearrange(s_x, '(b n) t d -> (b t) n d', n=n)
+        s_x = self.clip_ln_pre(s_x)
         #####################################################################
         
         t_x = self.patch_embed(x)
@@ -503,23 +517,28 @@ class STCrossTransformer(nn.Module):
             t_x = t_x + self.pos_embed.expand(B, -1, -1).type_as(t_x).to(t_x.device).clone().detach()
         t_x = self.pos_drop(t_x)
         
-        # s_x = s_x.permute(1,0,2)
+        s_x = s_x.permute(1,0,2)
         for blk in self.blocks:
-            t_x = blk(t_x)
-        # s_x = s_x.permute(1,0,2)
+            t_x = blk(s_x, t_x)
+        s_x = s_x.permute(1,0,2)
         
-        # s_x = rearrange(s_x, '(b t) n d -> b t n d', b=B)
-        # s_x = self.clip_ln_post(s_x[:,:,0,:].mean(1)) # all patch avg pooling
-        
+        s_x = rearrange(s_x, '(b t) n d -> b t n d', b=B)
+        s_x = self.clip_ln_post(s_x[:,:,0,:].mean(1)) # all patch avg pooling
         t_x = self.vmae_fc_norm(t_x.mean(1)) # all patch avg pooling
         
-        return t_x
+        return s_x, t_x
 
 
     def forward(self, x):
-        x = self.forward_features(x)
-        x = self.head(x)
-        return x
+        if self.composition:
+            s_x, t_x = self.forward_features(x)
+            s_x = self.head_noun(s_x)
+            t_x = self.head_verb(t_x)
+            return s_x, t_x
+        else:
+            x = self.forward(x)
+            x = self.head(x)
+            return x
 
 
 
@@ -527,7 +546,7 @@ class STCrossTransformer(nn.Module):
 def bidir_vit_base_patch16_224(pretrained=False, **kwargs):
     model = STCrossTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+        norm_layer=partial(nn.LayerNorm, eps=1e-6), composition=False, **kwargs)
     #model.default_cfg = _cfg()
     return model
 
@@ -538,4 +557,13 @@ def bidir_25811_vit_base_patch16_224(pretrained=False, **kwargs):
         norm_layer=partial(nn.LayerNorm, eps=1e-6), reduce_position=[2, 5, 8, 11], **kwargs)
     #model.default_cfg = _cfg()
     return model
+
+@register_model
+def compo_bidir_vit_base_patch16_224(pretrained=False, **kwargs):
+    model = STCrossTransformer(
+        patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6), composition=True, **kwargs)
+    #model.default_cfg = _cfg()
+    return model
+
 

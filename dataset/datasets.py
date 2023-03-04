@@ -175,12 +175,7 @@ def build_dataset(is_train, test_mode, args):
             new_height=256,
             new_width=320,
             args=args)
-        if args.pred_type == 'verb':
-            nb_classes = 97
-        elif args.pred_type == 'noun':
-            nb_classes = 300
-        elif args.pred_type == 'action':
-            nb_classes = 29100
+        nb_classes =(300, 97)
 
     elif args.data_set == 'UCF101':
         mode = None
@@ -245,7 +240,8 @@ def build_dataset(is_train, test_mode, args):
         nb_classes = 51
     else:
         raise NotImplementedError()
-    assert nb_classes == args.nb_classes
-    print("Number of the class = %d" % args.nb_classes)
+    if not args.data_set == 'EPIC':
+        assert nb_classes == args.nb_classes
+        print("Number of the class = %d" % args.nb_classes)
 
     return dataset, nb_classes

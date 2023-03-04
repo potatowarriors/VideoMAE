@@ -42,12 +42,9 @@ class EpicVideoClsDataset(Dataset):
           import pandas as pd
           cleaned = pd.read_csv(self.anno_path, header=None, delimiter=',')
           self.dataset_samples = list(cleaned.values[:, 0])
-          if args.pred_type == 'verb':
-               self.label_array = list(cleaned.values[:, 1]) # verb
-          elif args.pred_type == 'noun':
-               self.label_array = list(cleaned.values[:, 2]) # noun
-          elif args.pred_type == 'action':
-               self.label_array = list(cleaned.values[:, 3]) # action
+          verb_label_array = list(cleaned.values[:, 1]) # verb
+          noun_label_array = list(cleaned.values[:, 2]) # noun
+          self.label_array = np.stack((noun_label_array, verb_label_array), axis=0) # label [noun, verb] sequence
           
           if  (mode == 'train'):
                pass

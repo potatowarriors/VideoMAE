@@ -403,7 +403,7 @@ def load_bidir_weights(model, args):
         num_patches = model.patch_embed.num_patches # 
         num_extra_tokens = model.pos_embed.shape[-2] - num_patches # 0/1
 
-        # height (== width) for the checkpoint position embedding 
+        # height (== width) for the checkpoint position embedding
         orig_size = int(((pos_embed_checkpoint.shape[-2] - num_extra_tokens)//(args.num_frames // model.patch_embed.tubelet_size)) ** 0.5)
         # height (== width) for the new position embedding
         new_size = int((num_patches // (args.num_frames // model.patch_embed.tubelet_size) )** 0.5)
@@ -426,14 +426,13 @@ def load_bidir_weights(model, args):
 
     load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
     
-    # Original VideoMAE reproduce를 위해 잠시 꺼둔다
-    # with torch.no_grad():#! module_layers에 들어가는 것만 한다.
-    #     for i in range(12):
-    #         model.blocks[i].time_attn.out_proj.weight.copy_(model.blocks[i].clip_attn.out_proj.weight)
-    #         model.blocks[i].time_attn.out_proj.bias.copy_(model.blocks[i].clip_attn.out_proj.bias)
-    #         model.blocks[i].time_attn.in_proj_weight.copy_(model.blocks[i].clip_attn.in_proj_weight)
-    #         model.blocks[i].time_attn.in_proj_bias.copy_(model.blocks[i].clip_attn.in_proj_bias)
-    #     print("copy attn layer")
+    with torch.no_grad():#! module_layers에 들어가는 것만 한다.
+        for i in range(12):
+            model.blocks[i].time_attn.out_proj.weight.copy_(model.blocks[i].clip_attn.out_proj.weight)
+            model.blocks[i].time_attn.out_proj.bias.copy_(model.blocks[i].clip_attn.out_proj.bias)
+            model.blocks[i].time_attn.in_proj_weight.copy_(model.blocks[i].clip_attn.in_proj_weight)
+            model.blocks[i].time_attn.in_proj_bias.copy_(model.blocks[i].clip_attn.in_proj_bias)
+        print("copy attn layer")
         
 def load_clip_weights(model,load_path: str) -> Dict[str, torch.Tensor]:
     clip_model = torch.jit.load(load_path, map_location='cpu')

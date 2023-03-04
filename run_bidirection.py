@@ -16,9 +16,9 @@ from timm.models import create_model
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from timm.utils import ModelEma
 from util_tools.optim_factory import create_optimizer, get_parameter_groups, LayerDecayValueAssigner
+from engine_for_compomodel import train_one_epoch, validation_one_epoch, final_test, merge
 
 from dataset.datasets import build_dataset
-from engine_for_onemodel import train_one_epoch, validation_one_epoch, final_test, merge
 from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, freeze_block, unfreeze_block, read_alpha, focal_loss
 from util_tools.utils import cross_multiple_samples_collate, notice_message, laod_eval_weights
 import util_tools.utils as utils
@@ -195,6 +195,7 @@ def get_args():
     # new settings
     parser.add_argument('--freeze_layers', default=None, nargs='+', type=str)
     parser.add_argument('--slack_api', type=str,default=None)
+    parser.add_argument('--composition', action='store_true')
     
 
     known_args, _ = parser.parse_known_args()
