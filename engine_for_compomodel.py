@@ -59,17 +59,17 @@ def train_one_epoch(args, model: torch.nn.Module, criterion: torch.nn.Module,
         targets = targets.to(device, non_blocking=True)
 
         if mixup_fn is not None:
-            samples, targets = mixup_fn(samples, targets)
+            samples, target_noun, target_verb = mixup_fn(samples, targets)
         
         if loss_scaler is None:
             samples = samples.half()
             loss, output = composition_train_class_batch(
-                model, samples, targets, criterion)
+                model, samples, target_noun, target_verb, criterion)
         else:
             with torch.cuda.amp.autocast():
                 samples = samples.half()
                 loss, output = composition_train_class_batch(
-                    model, samples, targets, criterion)
+                    model, samples, target_noun, target_verb, criterion)
         loss_value = loss.item()
         #make_dot(loss, params=dict(model.named_parameters())).render(f'graph_ver2', format='png')        
 
@@ -163,11 +163,11 @@ def validation_one_epoch(args, data_loader, model, device):
         # compute output
         with torch.cuda.amp.autocast():
             output_noun, output_verb = model(samples)
-            loss_noun = criterion(output_noun, target)
-            loss_verb = criterion(output_verb, target)
+            loss_noun = criterion(output_noun, target[0])
+            loss_verb = criterion(output_verb, target[1])
 
-        acc1_noun, acc5_noun = accuracy(output_noun, target, topk=(1, 5))
-        acc1_verb, acc5_verb = accuracy(output_verb, target, topk=(1, 5))
+        acc1_noun, acc5_noun = accuracy(output_noun, target[0], topk=(1, 5))
+        acc1_verb, acc5_verb = accuracy(output_verb, target[1], topk=(1, 5))
 
         metric_logger.update(loss=loss_noun.item())
         metric_logger.update(loss=loss_verb.item())
@@ -207,27 +207,34 @@ def final_test(args, data_loader, model, device, file):
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(input)
-            loss = criterion(output, target)
+            output_noun, output_verb = model(input)
+            loss_noun = criterion(output_noun, target[0])
+            loss_verb = criterion(output_verb, target[1])
 
-        for i in range(output.size(0)):
+        for i in range(output_noun.size(0)):
+            ############################################ 이부분!!!!!!!!!!!!!! noun verb version으로 수정해줘야함!!!!!!!!!!!!!##########################
             string = "{} {} {} {} {}\n".format(ids[i], \
-                                                str(output.data[i].cpu().numpy().tolist()), \
-                                                str(int(target[i].cpu().numpy())), \
+                                                str(output_noun.data[i].cpu().numpy().tolist()), \
+                                                str(int(target[i,0].cpu().numpy())), \
                                                 str(int(chunk_nb[i].cpu().numpy())), \
                                                 str(int(split_nb[i].cpu().numpy())))
             final_result.append(string)
+            ##############################################################################################################################################
 
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        acc1_noun, acc5_noun = accuracy(output_noun, target[0], topk=(1, 5))
+        acc1_verb, acc5_verb = accuracy(output_verb, target[1], topk=(1, 5))
 
-        metric_logger.update(loss=loss.item())
-        metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
-        metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
+        metric_logger.update(loss_noun=loss_noun.item())
+        metric_logger.update(loss_verb=loss_verb.item())
+        metric_logger.meters['acc1'].update(acc1_noun.item(), n=batch_size)
+        metric_logger.meters['acc5'].update(acc5_noun.item(), n=batch_size)
+        metric_logger.meters['acc1'].update(acc1_verb.item(), n=batch_size)
+        metric_logger.meters['acc5'].update(acc5_verb.item(), n=batch_size)
 
     if not os.path.exists(file):
         os.mknod(file)
     with open(file, 'w') as f:
-        f.write("{}, {}\n".format(acc1, acc5))
+        f.write("{}, {}\n".format(acc1_noun, acc5_noun))
         for line in final_result:
             f.write(line)
     # gather the stats from all processes

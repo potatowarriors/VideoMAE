@@ -16,7 +16,6 @@ from timm.models import create_model
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from timm.utils import ModelEma
 from util_tools.optim_factory import create_optimizer, get_parameter_groups, LayerDecayValueAssigner
-from engine_for_compomodel import train_one_epoch, validation_one_epoch, final_test, merge
 
 from dataset.datasets import build_dataset
 from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, freeze_block, unfreeze_block, read_alpha, focal_loss
@@ -309,7 +308,7 @@ def main(args, ds_init):
         mixup_fn = Mixup(
             mixup_alpha=args.mixup, cutmix_alpha=args.cutmix, cutmix_minmax=args.cutmix_minmax,
             prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
-            label_smoothing=args.smoothing, num_classes=args.nb_classes)
+            label_smoothing=args.smoothing, num_classes=args.nb_classes, composition=args.composition)
 
     patch_size = 14
     print("Patch size = %s" % str(patch_size))
@@ -415,10 +414,7 @@ def main(args, ds_init):
         args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
-    if args.focal_loss_gamma is not None:
-        alpha = read_alpha('/data/kide004/repos/VideoMAE/dataset/epic/epic_class_dist.csv')
-        criterion = focal_loss(alpha=alpha, gamma=args.focal_loss_gamma)
-    elif mixup_fn is not None:
+    if mixup_fn is not None:
         # smoothing is handled with mixup label transform
         criterion = SoftTargetCrossEntropy()
     elif args.smoothing > 0.:
@@ -432,6 +428,10 @@ def main(args, ds_init):
         args=args, model=model, model_without_ddp=model_without_ddp,
         optimizer=optimizer, loss_scaler=loss_scaler, model_ema=model_ema)
     
+    if args.composition:
+        from engine_for_compomodel import train_one_epoch, validation_one_epoch, final_test, merge
+    else:
+        from engine_for_onemodel import train_one_epoch, validation_one_epoch, final_test, merge
 
     if args.eval:
         preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')

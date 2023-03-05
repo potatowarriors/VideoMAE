@@ -102,7 +102,7 @@ class Mixup:
         num_classes (int): number of classes for target
     """
     def __init__(self, mixup_alpha=1., cutmix_alpha=0., cutmix_minmax=None, prob=1.0, switch_prob=0.5,
-                 mode='batch', correct_lam=True, label_smoothing=0.1, num_classes=1000):
+                 mode='batch', correct_lam=True, label_smoothing=0.1, num_classes=1000, composition=False):
         self.mixup_alpha = mixup_alpha
         self.cutmix_alpha = cutmix_alpha
         self.cutmix_minmax = cutmix_minmax
@@ -117,6 +117,7 @@ class Mixup:
         self.mode = mode
         self.correct_lam = correct_lam  # correct lambda based on clipped area for cutmix
         self.mixup_enabled = True  # set to false to disable mixing (intended tp be set by train loop)
+        self.composition = composition
 
     def _params_per_elem(self, batch_size):
         lam = np.ones(batch_size, dtype=np.float32)
@@ -214,8 +215,13 @@ class Mixup:
             lam = self._mix_pair(x)
         else:
             lam = self._mix_batch(x)
-        target = mixup_target(target, self.num_classes, lam, self.label_smoothing, x.device)
-        return x, target
+        if self.composition:
+            target_noun = mixup_target(target[0], 300, lam, self.label_smoothing, x.device)
+            target_verb = mixup_target(target[1], 97, lam, self.label_smoothing, x.device)
+            return x, target_noun, target_verb
+        else:
+            target = mixup_target(target, self.num_classes, lam, self.label_smoothing, x.device)
+            return x, target
 
 
 class FastCollateMixup(Mixup):

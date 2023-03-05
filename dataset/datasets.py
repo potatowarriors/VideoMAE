@@ -175,7 +175,7 @@ def build_dataset(is_train, test_mode, args):
             new_height=256,
             new_width=320,
             args=args)
-        nb_classes =(300, 97)
+        nb_classes = 300
 
     elif args.data_set == 'UCF101':
         mode = None
@@ -240,8 +240,8 @@ def build_dataset(is_train, test_mode, args):
         nb_classes = 51
     else:
         raise NotImplementedError()
-    if not args.data_set == 'EPIC':
-        assert nb_classes == args.nb_classes
-        print("Number of the class = %d" % args.nb_classes)
+    
+    assert nb_classes == args.nb_classes
+    print("Number of the class = %d" % args.nb_classes)
 
     return dataset, nb_classes

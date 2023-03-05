@@ -345,7 +345,7 @@ class Block(nn.Module):
         return self.time_attn(x,x,x,need_weights=False,attn_mask=None)[0]
 
     def forward(self,s_x, t_x):
-        B = t_x.shape(0)
+        B = t_x.shape[0]
         n, bt, _ = s_x.shape
         num_frames = bt//B
         ############################ MHSA Forward #############################
@@ -495,8 +495,8 @@ class STCrossTransformer(nn.Module):
         self.vmae_fc_norm = nn.LayerNorm(self.embed_dim)
 
     def forward_features(self, x):
-        B = x.size(0)
-        s_x, t_x = x
+        B = x.shape[0]
+        s_x = x
         ######################## AIM spatial path #########################
         s_x = rearrange(s_x, 'b c t h w -> (b t) c h w')
         s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
@@ -511,15 +511,17 @@ class STCrossTransformer(nn.Module):
         s_x = self.clip_ln_pre(s_x)
         #####################################################################
         
+        ######################## VMAE spatial path #########################
         t_x = self.patch_embed(x)
 
         if self.pos_embed is not None:
             t_x = t_x + self.pos_embed.expand(B, -1, -1).type_as(t_x).to(t_x.device).clone().detach()
         t_x = self.pos_drop(t_x)
+        #####################################################################
         
         s_x = s_x.permute(1,0,2)
         for blk in self.blocks:
-            t_x = blk(s_x, t_x)
+            s_x, t_x = blk(s_x, t_x)
         s_x = s_x.permute(1,0,2)
         
         s_x = rearrange(s_x, '(b t) n d -> b t n d', b=B)

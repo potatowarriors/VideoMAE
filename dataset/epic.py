@@ -44,7 +44,7 @@ class EpicVideoClsDataset(Dataset):
           self.dataset_samples = list(cleaned.values[:, 0])
           verb_label_array = list(cleaned.values[:, 1]) # verb
           noun_label_array = list(cleaned.values[:, 2]) # noun
-          self.label_array = np.stack((noun_label_array, verb_label_array), axis=0) # label [noun, verb] sequence
+          self.label_array = np.stack((noun_label_array, verb_label_array), axis=1) # label [noun, verb] sequence
           
           if  (mode == 'train'):
                pass
