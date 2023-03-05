@@ -216,8 +216,8 @@ class Mixup:
         else:
             lam = self._mix_batch(x)
         if self.composition:
-            target_noun = mixup_target(target[0], 300, lam, self.label_smoothing, x.device)
-            target_verb = mixup_target(target[1], 97, lam, self.label_smoothing, x.device)
+            target_noun = mixup_target(target[:,0], 300, lam, self.label_smoothing, x.device)
+            target_verb = mixup_target(target[:,1], 97, lam, self.label_smoothing, x.device)
             return x, target_noun, target_verb
         else:
             target = mixup_target(target, self.num_classes, lam, self.label_smoothing, x.device)

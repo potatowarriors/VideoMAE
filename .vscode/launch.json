@@ -14,7 +14,7 @@
                "args" : [
                     "--nproc_per_node", "1",
                     "--master_port", "12330",
-                    "/data/kide004/repos/VideoMAE/run_bidirection.py",
+                    "/data/kide004/repos/VideoMAE/run_bidirection_compo.py",
                     "--vmae_model", "compo_bidir_vit_base_patch16_224",
                     "--data_set", "EPIC",
                     "--nb_classes", "300",
@@ -26,7 +26,7 @@
                     "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
                     "--batch_size", "6",
                     "--num_sample", "1",
-                    "--epochs", "10",
+                    "--epochs", "2",
                     "--save_ckpt_freq", "1",
                     "--input_size", "224",
                     "--short_side_size", "224",
@@ -39,6 +39,7 @@
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
                     "--dist_eval",
+                    "--warmup_epochs", "1",
                     "--composition"
                ]
           }

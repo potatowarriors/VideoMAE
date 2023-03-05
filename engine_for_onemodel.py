@@ -200,7 +200,7 @@ def final_test(args, data_loader, model, device, file):
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(input)
+            output = model(samples)
             loss = criterion(output, target)
 
         for i in range(output.size(0)):
