@@ -264,7 +264,7 @@ def final_test(args, data_loader, model, device, file):
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print('* Acc_@1_action {top1_action.global_avg:.3f} Acc_@1_noun {top1_noun.global_avg:.3f} Acc@5_noun {top5_noun.global_avg:.3f} loss_noun {losses_noun.global_avg:.3f} Acc_@1_verb {top1_verb.global_avg:.3f} Acc@5_verb {top5_verb.global_avg:.3f} loss_verb {losses_verb.global_avg:.3f}'
-          .format(top1_action=metric_logger.acc1_action, top1_noun=metric_logger.acc1_noun, top5_noun=metric_logger.acc5_noun, losses_noun=metric_logger.loss_noun, top1_verb=metric_logger.acc1_noun, top5_verb=metric_logger.acc5_noun, losses_verb=metric_logger.loss_verb))
+          .format(top1_action=metric_logger.acc1_action, top1_noun=metric_logger.acc1_noun, top5_noun=metric_logger.acc5_noun, losses_noun=metric_logger.loss_noun, top1_verb=metric_logger.acc1_verb, top5_verb=metric_logger.acc5_verb, losses_verb=metric_logger.loss_verb))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
