@@ -244,38 +244,39 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         all_head_dim = head_dim * self.num_head
         
         #여기에 cross attn t2s module이 들어가야 한다.
-        self.t2s_q = nn.Linear(dim, all_head_dim, bias=False) # 197 tokens(cls+patch) * num_frames
-        self.t2s_q_bias = nn.Parameter(torch.zeros(all_head_dim))
+        self.t2s_qv = nn.Linear(dim, all_head_dim * 2, bias=False)
+        self.t2s_qv_bias = nn.Parameter(torch.zeros(all_head_dim * 2))
         
-        self.t2s_kv = nn.Linear(dim, all_head_dim * 2, bias=False)
-        self.t2s_kv_bias = nn.Parameter(torch.zeros(all_head_dim))
+        self.t2s_k = nn.Linear(dim, all_head_dim, bias=False) # 197 tokens(cls+patch) * num_frames
+        self.t2s_k_bias = nn.Parameter(torch.zeros(all_head_dim))
         
         self.t2s_proj = nn.Linear(all_head_dim, dim)
-        # 여기에 drop out 할지 말지는 고민좀 해보자.
         
         self.attn_mask = attn_mask
     
     def t2s_cross_attn(self, s_x, t_x): # s_x=[n (b t) d], t_x=[b n d]
         B, _, _ = t_x.shape
-        s_x = rearrange(s_x, 'n (b t) d -> b (t n) d', b=B) # batch -> token
-        t2s_q_bias = self.t2s_q_bias
-        t2s_kv_bias = torch.cat((torch.zeros_like(self.t2s_kv_bias, requires_grad=False), self.t2s_kv_bias))
+        s_x_cls, s_x_pat = s_x[0, :, :], s_x[1:, :, :]
+        s_x_pat = rearrange(s_x_pat, 'n (b t) d -> b (t n) d', b=B) # batch -> token
+        t2s_qv_bias = self.t2s_qv_bias
+        t2s_k_bias = self.t2s_k_bias
         
-        t2s_q = F.linear(input=s_x, weight=self.t2s_q.weight, bias=t2s_q_bias)
-        t2s_q = rearrange(t2s_q, 'b n (h d) -> b h n d', h=self.num_head)
-        t2s_kv = F.linear(input=t_x, weight=self.t2s_kv.weight, bias=t2s_kv_bias)
-        t2s_kv = rearrange(t2s_kv, 'b n (e h d) -> e b h n d', e=2, h=self.num_head)
-        t2s_k, t2s_v = t2s_kv[0], t2s_kv[1]
+        t2s_qv = F.linear(input=s_x_pat, weight=self.t2s_qv.weight, bias=t2s_qv_bias)
+        t2s_qv = rearrange(t2s_qv, 'b n (e h d) -> e b h n d',e=2, h=self.num_head)
+        t2s_k = F.linear(input=t_x, weight=self.t2s_k.weight, bias=t2s_k_bias)
+        t2s_k = rearrange(t2s_k, 'b n (h d) -> b h n d', h=self.num_head)
+        t2s_q, t2s_v = t2s_qv[0], t2s_qv[1]
         
         t2s_q = t2s_q * self.scale
         t2s_attn = (t2s_q @ t2s_k.transpose(-2, -1))
         
         t2s_attn = t2s_attn.softmax(dim=-1)
         
-        s_x = (t2s_attn @ t2s_v)
-        s_x = rearrange(s_x, 'b h n d -> b n (h d)')
-        s_x = self.t2s_proj(s_x)
-        s_x = rearrange(s_x,'b (t n) d -> n (b t) d', b=B, t=8)
+        s_x_pat = (t2s_attn @ t2s_v)
+        s_x_pat = rearrange(s_x_pat, 'b h n d -> b n (h d)')
+        s_x_pat = self.t2s_proj(s_x_pat)
+        s_x_pat = rearrange(s_x_pat,'b (t n) d -> n (b t) d', b=B, t=8)
+        s_x = torch.cat([s_x_cls.unsqueeze(0), s_x_pat], dim=0)
         return s_x
 
     def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
@@ -293,6 +294,15 @@ class Block(nn.Module):
         self.scale = 0.5
         mlp_hidden_dim = int(dim * mlp_ratio)
         
+        ###################################### Cross attention ####################################
+        # self.cross_s_down = nn.Linear(dim, dim//2)
+        # self.cross_t_down = nn.Linear(dim, dim//2)
+        self.ln_s_cross = norm_layer(dim)
+        self.ln_t_cross = norm_layer(dim)
+        self.t2s_cross = CrossAttentionT2S(dim=dim, n_head=num_heads)
+        # self.cross_s_up = nn.Linear(dim//2, dim)
+        ###########################################################################################
+        
         ###################################### MHSA code #####################################
         ############################ AIM MHSA ###########################
         self.clip_ln_1 = LayerNorm(dim)
@@ -308,15 +318,6 @@ class Block(nn.Module):
         self.T_Adapter = Adapter(dim)
         ##################################################################
         #########################################################################################
-        
-        ###################################### Cross attention ####################################
-        # self.cross_s_down = nn.Linear(dim, dim//2)
-        # self.cross_t_down = nn.Linear(dim, dim//2)
-        self.ln_s_cross = norm_layer(dim)
-        self.ln_t_cross = norm_layer(dim)
-        self.t2s_cross = CrossAttentionT2S(dim=dim, n_head=num_heads)
-        # self.cross_s_up = nn.Linear(dim//2, dim)
-        
         
         ###################################### FFN code #########################################
         ############################ AIM FFN ###############################
@@ -348,18 +349,19 @@ class Block(nn.Module):
         B = t_x.shape[0]
         n, bt, _ = s_x.shape
         num_frames = bt//B
-        ############################ MHSA Forward #############################
-        # AIM Space MHSA
-        s_x = s_x + self.S_Adapter(self.attention(self.clip_ln_1(s_x))) # original space multi head self attention
-        # VMAE Time MHSA
-        t_x = t_x + self.T_Adapter(self.attn(self.norm1(t_x)))
-        ########################################################################
         
         ############################ Cross Forward #############################
         c_s_x = self.ln_s_cross(s_x)
         c_t_x = self.ln_t_cross(t_x)
         s_x = s_x + self.drop_path(self.t2s_cross(c_s_x, c_t_x))
         #########################################################################
+        
+        ############################ MHSA Forward #############################
+        # AIM Space MHSA
+        s_x = s_x + self.S_Adapter(self.attention(self.clip_ln_1(s_x))) # original space multi head self attention
+        # VMAE Time MHSA
+        t_x = t_x + self.T_Adapter(self.attn(self.norm1(t_x)))
+        ########################################################################
         
         ############################ FFN Forward ##################################
         s_xn = self.clip_ln_2(s_x)
@@ -410,7 +412,7 @@ class STCrossTransformer(nn.Module):
         self.clip_conv1 = nn.Conv2d(in_channels=3, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size, bias=False)
         self.clip_class_embedding = nn.Parameter(scale * torch.randn(embed_dim))
         self.clip_positional_embedding = nn.Parameter(scale * torch.randn((img_size // patch_size) ** 2 + 1, embed_dim))
-        self.clip_temporal_embedding = nn.Parameter(torch.zeros(1, 8, embed_dim))
+        self.clip_temporal_embedding = nn.Parameter(torch.zeros(1, 197*8, embed_dim))
         self.clip_ln_pre = LayerNorm(embed_dim)
 
         if use_learnable_pos_emb:
@@ -511,9 +513,9 @@ class STCrossTransformer(nn.Module):
         s_x = torch.cat([self.clip_class_embedding.to(s_x.dtype) + torch.zeros(s_x.shape[0], 1, s_x.shape[-1], dtype=s_x.dtype, device=s_x.device), s_x], dim=1)
         s_x = s_x + self.clip_positional_embedding.to(s_x.dtype)
         n = s_x.shape[1]
-        s_x = rearrange(s_x, '(b t) n d -> (b n) t d', t=s_t)
+        s_x = rearrange(s_x, '(b t) n d -> b (t n) d', t=s_t)
         s_x = s_x + self.clip_temporal_embedding
-        s_x = rearrange(s_x, '(b n) t d -> (b t) n d', n=n)
+        s_x = rearrange(s_x, 'b (t n) d -> (b t) n d', n=n)
         s_x = self.clip_ln_pre(s_x)
         #####################################################################
         
