@@ -244,29 +244,27 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         all_head_dim = head_dim * self.num_head
         
         #여기에 cross attn t2s module이 들어가야 한다.
-        self.t2s_q = nn.Linear(dim, all_head_dim, bias=False)
-        self.t2s_q_bias = nn.Parameter(torch.zeros(dim))
+        self.t2s_q = nn.Linear(dim, all_head_dim, bias=False) # 197 tokens(cls+patch) * num_frames
+        self.t2s_q_bias = nn.Parameter(torch.zeros(all_head_dim))
         
         self.t2s_kv = nn.Linear(dim, all_head_dim * 2, bias=False)
-        self.t2s_kv_bias = nn.Parameter(torch.zeros(dim))
+        self.t2s_kv_bias = nn.Parameter(torch.zeros(all_head_dim))
         
         self.t2s_proj = nn.Linear(all_head_dim, dim)
         # 여기에 drop out 할지 말지는 고민좀 해보자.
         
         self.attn_mask = attn_mask
     
-    def t2s_cross_attn(self, s_x, t_x):
+    def t2s_cross_attn(self, s_x, t_x): # s_x=[n (b t) d], t_x=[b n d]
         B, _, _ = t_x.shape
-        s_x, s_x_cls = s_x[1:,:,:], s_x[0,:,:]
-        s_x = rearrange(s_x, 'n (b t) d -> (b n) t d', b=B) # batch -> token
-        t_x = rearrange(t_x, 'b (t n) d -> (b n) t d', t=8)
+        s_x = rearrange(s_x, 'n (b t) d -> b (t n) d', b=B) # batch -> token
         t2s_q_bias = self.t2s_q_bias
         t2s_kv_bias = torch.cat((torch.zeros_like(self.t2s_kv_bias, requires_grad=False), self.t2s_kv_bias))
         
         t2s_q = F.linear(input=s_x, weight=self.t2s_q.weight, bias=t2s_q_bias)
-        t2s_q = rearrange(t2s_q, 'b t (h d) -> b h t d', h=self.num_head)
+        t2s_q = rearrange(t2s_q, 'b n (h d) -> b h n d', h=self.num_head)
         t2s_kv = F.linear(input=t_x, weight=self.t2s_kv.weight, bias=t2s_kv_bias)
-        t2s_kv = rearrange(t2s_kv, 'b t (e h d) -> e b h t d', e=2, h=self.num_head)
+        t2s_kv = rearrange(t2s_kv, 'b n (e h d) -> e b h n d', e=2, h=self.num_head)
         t2s_k, t2s_v = t2s_kv[0], t2s_kv[1]
         
         t2s_q = t2s_q * self.scale
@@ -275,10 +273,9 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         t2s_attn = t2s_attn.softmax(dim=-1)
         
         s_x = (t2s_attn @ t2s_v)
-        s_x = rearrange(s_x, 'b h t d -> b t (h d)')
+        s_x = rearrange(s_x, 'b h n d -> b n (h d)')
         s_x = self.t2s_proj(s_x)
-        s_x = rearrange(s_x,'(b n) t d -> n (b t) d', b=B, t=8)
-        s_x = torch.cat((s_x_cls.unsqueeze(0), s_x), 0)
+        s_x = rearrange(s_x,'b (t n) d -> n (b t) d', b=B, t=8)
         return s_x
 
     def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
@@ -288,20 +285,17 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
 class Block(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., init_values=None, num_layer=0, act_layer=nn.GELU, norm_layer=nn.LayerNorm,attn_head_dim=None):
+                 drop_path=0., init_values=None, num_layer=0, act_layer=nn.GELU, norm_layer=nn.LayerNorm, attn_head_dim=None):
         super().__init__()
         self.cross = None
         self.num_layer = num_layer
-        self.num_tadapter = 1
         self.num_heads = num_heads
         self.scale = 0.5
         mlp_hidden_dim = int(dim * mlp_ratio)
         
         ###################################### MHSA code #####################################
-        ############################ AIM MHSA + AIM Ddvide Time MHSA ###########################
+        ############################ AIM MHSA ###########################
         self.clip_ln_1 = LayerNorm(dim)
-        self.time_attn = nn.MultiheadAttention(dim, num_heads)
-        self.ST_Adapter = Adapter(dim, skip_connect=False)
         self.clip_attn = nn.MultiheadAttention(dim, num_heads)
         self.S_Adapter = Adapter(dim)
         ##################################################################
@@ -314,6 +308,14 @@ class Block(nn.Module):
         self.T_Adapter = Adapter(dim)
         ##################################################################
         #########################################################################################
+        
+        ###################################### Cross attention ####################################
+        # self.cross_s_down = nn.Linear(dim, dim//2)
+        # self.cross_t_down = nn.Linear(dim, dim//2)
+        self.ln_s_cross = norm_layer(dim)
+        self.ln_t_cross = norm_layer(dim)
+        self.t2s_cross = CrossAttentionT2S(dim=dim, n_head=num_heads)
+        # self.cross_s_up = nn.Linear(dim//2, dim)
         
         
         ###################################### FFN code #########################################
@@ -341,25 +343,23 @@ class Block(nn.Module):
     def attention(self, x: torch.Tensor):
         self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
         return self.clip_attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
-    def time_attention(self, x:torch.Tensor):
-        return self.time_attn(x,x,x,need_weights=False,attn_mask=None)[0]
 
     def forward(self,s_x, t_x):
         B = t_x.shape[0]
         n, bt, _ = s_x.shape
         num_frames = bt//B
         ############################ MHSA Forward #############################
-        # AIM Time MHSA
-        s_xt = rearrange(s_x, 'n (b t) d -> t (b n) d', t=num_frames)
-        s_xt = self.ST_Adapter(self.time_attention(self.clip_ln_1(s_xt)))
-        s_xt = rearrange(s_xt, 't (b n) d -> n (b t) d', n=n)
-        s_x = s_x + self.drop_path(s_xt) # skip connection original + time attention result
         # AIM Space MHSA
         s_x = s_x + self.S_Adapter(self.attention(self.clip_ln_1(s_x))) # original space multi head self attention
         # VMAE Time MHSA
         t_x = t_x + self.T_Adapter(self.attn(self.norm1(t_x)))
         ########################################################################
         
+        ############################ Cross Forward #############################
+        c_s_x = self.ln_s_cross(s_x)
+        c_t_x = self.ln_t_cross(t_x)
+        s_x = s_x + self.drop_path(self.t2s_cross(c_s_x, c_t_x))
+        #########################################################################
         
         ############################ FFN Forward ##################################
         s_xn = self.clip_ln_2(s_x)
@@ -475,6 +475,11 @@ class STCrossTransformer(nn.Module):
                         if isinstance(m2, nn.Linear):
                             nn.init.constant_(m2.weight, 0)
                             nn.init.constant_(m2.bias, 0)
+            elif 'up' in n:
+                for n2, m2 in m.named_modules():
+                    if isinstance(m2, nn.Linear):
+                        nn.init.constant_(m2.weight, 0)
+                        nn.init.constant_(m2.bias, 0)
         
 
     def get_num_layers(self):
@@ -496,8 +501,9 @@ class STCrossTransformer(nn.Module):
 
     def forward_features(self, x):
         B = x.shape[0]
-        s_x = x
+        s_x = x[:, :, 1::2, :, :] # pick even frames (8 frame)
         ######################## AIM spatial path #########################
+        s_t = s_x.shape[2]
         s_x = rearrange(s_x, 'b c t h w -> (b t) c h w')
         s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
         s_x = s_x.reshape(s_x.shape[0], s_x.shape[1], -1) # [*, embeddim, grid**2]
@@ -505,7 +511,7 @@ class STCrossTransformer(nn.Module):
         s_x = torch.cat([self.clip_class_embedding.to(s_x.dtype) + torch.zeros(s_x.shape[0], 1, s_x.shape[-1], dtype=s_x.dtype, device=s_x.device), s_x], dim=1)
         s_x = s_x + self.clip_positional_embedding.to(s_x.dtype)
         n = s_x.shape[1]
-        s_x = rearrange(s_x, '(b t) n d -> (b n) t d', t=8)
+        s_x = rearrange(s_x, '(b t) n d -> (b n) t d', t=s_t)
         s_x = s_x + self.clip_temporal_embedding
         s_x = rearrange(s_x, '(b n) t d -> (b t) n d', n=n)
         s_x = self.clip_ln_pre(s_x)

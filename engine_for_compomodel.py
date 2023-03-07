@@ -180,17 +180,17 @@ def validation_one_epoch(args, data_loader, model, device):
         metric_logger.update(loss_verb=loss_verb.item())
         metric_logger.update(acc1_action=acc1_action.item())
         metric_logger.update(acc1_noun=acc1_noun.item())
+        metric_logger.update(acc1_verb=acc1_verb.item())
         metric_logger.update(acc5_noun=acc5_noun.item())
-        metric_logger.update(acc1_verb=acc1_noun.item())
-        metric_logger.update(acc5_verb=acc5_noun.item())
+        metric_logger.update(acc5_verb=acc5_verb.item())
         metric_logger.meters['acc1_noun'].update(acc1_noun.item(), n=batch_size)
         metric_logger.meters['acc1_verb'].update(acc1_verb.item(), n=batch_size)
         metric_logger.meters['acc5_noun'].update(acc5_noun.item(), n=batch_size)
         metric_logger.meters['acc5_verb'].update(acc5_verb.item(), n=batch_size)
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print('* Acc_@1_action {top1_action.global_avg:.3f} Acc_@1_noun {top1_noun.global_avg:.3f} Acc@5_noun {top5_noun.global_avg:.3f} loss_noun {losses_noun.global_avg:.3f} Acc_@1_verb {top1_verb.global_avg:.3f} Acc@5_verb {top5_verb.global_avg:.3f} loss_verb {losses_verb.global_avg:.3f}'
-          .format(top1_action=metric_logger.acc1_action, top1_noun=metric_logger.acc1_noun, top5_noun=metric_logger.acc5_noun, losses_noun=metric_logger.loss_noun, top1_verb=metric_logger.acc1_noun, top5_verb=metric_logger.acc5_noun, losses_verb=metric_logger.loss_noun))
+    print('* Acc_@1_action {top1_action.global_avg:.3f} Acc_@1_noun {top1_noun.global_avg:.3f} Acc_@1_verb {top1_verb.global_avg:.3f} Acc@5_noun {top5_noun.global_avg:.3f} Acc@5_verb {top5_verb.global_avg:.3f} loss_noun {losses_noun.global_avg:.3f} loss_verb {losses_verb.global_avg:.3f}'
+          .format(top1_action=metric_logger.acc1_action, top1_noun=metric_logger.acc1_noun, top1_verb=metric_logger.acc1_verb, top5_noun=metric_logger.acc5_noun, top5_verb=metric_logger.acc5_verb, losses_noun=metric_logger.loss_noun, losses_verb=metric_logger.loss_verb))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
@@ -246,13 +246,13 @@ def final_test(args, data_loader, model, device, file):
         metric_logger.update(loss_verb=loss_verb.item())
         metric_logger.update(acc1_action=acc1_action.item())
         metric_logger.update(acc1_noun=acc1_noun.item())
-        metric_logger.update(acc5_noun=acc5_noun.item())
         metric_logger.update(acc1_verb=acc1_verb.item())
+        metric_logger.update(acc5_noun=acc5_noun.item())
         metric_logger.update(acc5_verb=acc5_verb.item())
         metric_logger.meters['acc1_action'].update(acc1_action.item(), n=batch_size)
         metric_logger.meters['acc1_noun'].update(acc1_noun.item(), n=batch_size)
-        metric_logger.meters['acc5_noun'].update(acc5_noun.item(), n=batch_size)
         metric_logger.meters['acc1_verb'].update(acc1_verb.item(), n=batch_size)
+        metric_logger.meters['acc5_noun'].update(acc5_noun.item(), n=batch_size)
         metric_logger.meters['acc5_verb'].update(acc5_verb.item(), n=batch_size)
 
     if not os.path.exists(file):
@@ -263,8 +263,8 @@ def final_test(args, data_loader, model, device, file):
             f.write(line)
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print('* Acc_@1_action {top1_action.global_avg:.3f} Acc_@1_noun {top1_noun.global_avg:.3f} Acc@5_noun {top5_noun.global_avg:.3f} loss_noun {losses_noun.global_avg:.3f} Acc_@1_verb {top1_verb.global_avg:.3f} Acc@5_verb {top5_verb.global_avg:.3f} loss_verb {losses_verb.global_avg:.3f}'
-          .format(top1_action=metric_logger.acc1_action, top1_noun=metric_logger.acc1_noun, top5_noun=metric_logger.acc5_noun, losses_noun=metric_logger.loss_noun, top1_verb=metric_logger.acc1_verb, top5_verb=metric_logger.acc5_verb, losses_verb=metric_logger.loss_verb))
+    print('* Acc_@1_action {top1_action.global_avg:.3f} Acc_@1_noun {top1_noun.global_avg:.3f} Acc_@1_verb {top1_verb.global_avg:.3f} Acc@5_noun {top5_noun.global_avg:.3f} Acc@5_verb {top5_verb.global_avg:.3f} loss_noun {losses_noun.global_avg:.3f} loss_verb {losses_verb.global_avg:.3f}'
+          .format(top1_action=metric_logger.acc1_action, top1_noun=metric_logger.acc1_noun, top1_verb=metric_logger.acc1_verb, top5_noun=metric_logger.acc5_noun, top5_verb=metric_logger.acc5_verb, losses_noun=metric_logger.loss_noun, losses_verb=metric_logger.loss_verb))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
