@@ -293,16 +293,7 @@ class Block(nn.Module):
         self.num_heads = num_heads
         self.scale = 0.5
         mlp_hidden_dim = int(dim * mlp_ratio)
-        
-        ###################################### Cross attention ####################################
-        # self.cross_s_down = nn.Linear(dim, dim//2)
-        # self.cross_t_down = nn.Linear(dim, dim//2)
-        self.ln_s_cross = norm_layer(dim)
-        self.ln_t_cross = norm_layer(dim)
-        self.t2s_cross = CrossAttentionT2S(dim=dim, n_head=num_heads)
-        self.cross_Adapter = Adapter(dim, skip_connect=False)
-        # self.cross_s_up = nn.Linear(dim//2, dim)
-        ###########################################################################################
+        self.act = act_layer
         
         ###################################### MHSA code #####################################
         ############################ AIM MHSA ###########################
@@ -319,6 +310,15 @@ class Block(nn.Module):
         self.T_Adapter = Adapter(dim)
         ##################################################################
         #########################################################################################
+        
+        ###################################### Cross attention ####################################
+        self.cross_s_down = nn.Linear(dim, dim//2)
+        self.cross_t_down = nn.Linear(dim, dim//2)
+        self.ln_s_cross = norm_layer(dim//2)
+        self.ln_t_cross = norm_layer(dim//2)
+        self.t2s_cross = CrossAttentionT2S(dim//2, n_head=num_heads)
+        self.cross_s_up = nn.Linear(dim//2, dim)
+        ###########################################################################################
         
         ###################################### FFN code #########################################
         ############################ AIM FFN ###############################
@@ -351,19 +351,19 @@ class Block(nn.Module):
         n, bt, _ = s_x.shape
         num_frames = bt//B
         
-        ############################ Cross Forward #############################
-        c_s_x = self.ln_s_cross(s_x)
-        c_t_x = self.ln_t_cross(t_x)
-        c_s_x = self.cross_Adapter(self.t2s_cross(c_s_x, c_t_x))
-        s_x = s_x + self.drop_path(c_s_x)
-        #########################################################################
-        
         ############################ MHSA Forward #############################
         # AIM Space MHSA
         s_x = s_x + self.S_Adapter(self.attention(self.clip_ln_1(s_x))) # original space multi head self attention
         # VMAE Time MHSA
         t_x = t_x + self.T_Adapter(self.attn(self.norm1(t_x)))
         ########################################################################
+        
+        ############################ Cross Forward #############################
+        n_s_x = self.ln_s_cross(self.act(self.cross_s_down(s_x)))
+        n_t_x = self.ln_t_cross(self.act(self.cross_t_down(t_x)))
+        c_s_x = self.cross_s_up(self.t2s_cross(n_s_x, n_t_x))
+        s_x = s_x + self.drop_path(c_s_x)
+        #########################################################################
         
         ############################ FFN Forward ##################################
         s_xn = self.clip_ln_2(s_x)
