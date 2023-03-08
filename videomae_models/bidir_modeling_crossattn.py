@@ -300,6 +300,7 @@ class Block(nn.Module):
         self.ln_s_cross = norm_layer(dim)
         self.ln_t_cross = norm_layer(dim)
         self.t2s_cross = CrossAttentionT2S(dim=dim, n_head=num_heads)
+        self.cross_Adapter = Adapter(dim, skip_connect=False)
         # self.cross_s_up = nn.Linear(dim//2, dim)
         ###########################################################################################
         
@@ -353,7 +354,8 @@ class Block(nn.Module):
         ############################ Cross Forward #############################
         c_s_x = self.ln_s_cross(s_x)
         c_t_x = self.ln_t_cross(t_x)
-        s_x = s_x + self.drop_path(self.t2s_cross(c_s_x, c_t_x))
+        c_s_x = self.cross_Adapter(self.t2s_cross(c_s_x, c_t_x))
+        s_x = s_x + self.drop_path(c_s_x)
         #########################################################################
         
         ############################ MHSA Forward #############################
