@@ -173,63 +173,52 @@ class Attention(nn.Module):
     
 # spatial to temporal cross attention module.
 class CrossAttentionS2T(nn.Module):
-    def __init__(
-            self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0.,
-            proj_drop=0., attn_head_dim=None):
+    def __init__(self, dim: int, n_head: int, attn_mask: torch.Tensor = None):
         super().__init__()
-        self.num_heads = num_heads
-        head_dim = dim // num_heads
-        if attn_head_dim is not None:
-            head_dim = attn_head_dim
-        all_head_dim = head_dim * self.num_heads
-        self.scale = qk_scale or head_dim ** -0.5
 
-        #self.qkv = nn.Linear(dim, all_head_dim * 3, bias=False)
-        # cross attn split weight
-        self.s2t_q = nn.Linear(dim, all_head_dim, bias=False)
-        self.s2t_kv = nn.Linear(dim, all_head_dim * 2, bias=False)
-        if qkv_bias:
-            self.s2t_q_bias = nn.Parameter(torch.zeros(all_head_dim))
-            self.s2t_kv_bias = nn.Parameter(torch.zeros(all_head_dim))
-        else:
-            self.s2t_q_bias = None
-            self.s2t_kv_bias = None
-
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(all_head_dim, dim)
-        self.proj_drop = nn.Dropout(proj_drop)
-
-    def forward(self, s_x, t_x):
-        B, t_N, C = t_x.shape
-        s_x = rearrange(s_x, 'n (b t) d -> b t n d', b=B)
-        s_x_cls = s_x[:,:,0,:] # pick cls token
-        _, s_N, C = s_x_cls.shape
-        s2t_q_bias = None
-        s2t_kv_bias = None
-        if self.s2t_q_bias is not None:
-            s2t_q_bias = self.s2t_q_bias
-            s2t_kv_bias = torch.cat((torch.zeros_like(self.s2t_kv_bias, requires_grad=False), self.s2t_kv_bias))
-        # qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        # add for cross-attn
+        self.num_head = n_head
+        head_dim = dim // self.num_head
+        self.scale = head_dim ** -0.5
+        all_head_dim = head_dim * self.num_head
         
-        # querry = temporal input
+        #여기에 cross attn t2s module이 들어가야 한다.
+        self.s2t_q = nn.Linear(dim, all_head_dim, bias=False)
+        self.s2t_q_bias = nn.Parameter(torch.zeros(all_head_dim))
+        self.s2t_kv = nn.Linear(dim, all_head_dim * 2, bias=False) # 197 tokens(cls+patch) * num_frames
+        self.s2t_kv_bias = nn.Parameter(torch.zeros(all_head_dim * 2))
+        
+        self.t2s_proj = nn.Linear(all_head_dim, dim)
+        
+        self.attn_mask = attn_mask
+    
+    def t2s_cross_attn(self, s_x, t_x): # s_x=[n (b t) d], t_x=[b n d]
+        B, _, _ = t_x.shape
+        s_x_cls, s_x_pat = s_x[0, :, :], s_x[1:, :, :]
+        s_x_pat = rearrange(s_x_pat, 'n (b t) d -> (b t) n d', b=B) # batch -> token
+        t_x = rearrange(t_x, 'b (t n) d -> (b t) n d', t=8)
+        s2t_q_bias = self.s2t_q_bias
+        s2t_kv_bias = self.s2t_kv_bias
+        
         s2t_q = F.linear(input=t_x, weight=self.s2t_q.weight, bias=s2t_q_bias)
-        s2t_q = s2t_q.reshape(B, t_N, self.num_heads, -1).permute(0, 2, 1, 3)
-        # s2t_kv = spatial input
-        s2t_kv = F.linear(input=s_x_cls, weight=self.s2t_kv.weight, bias=s2t_kv_bias)
-        s2t_kv = s2t_kv.reshape(B, s_N, 2, self.num_heads, -1).permute(2, 0, 3, 1, 4)
-        s2t_q, s2t_k, s2t_v = s2t_q, s2t_kv[0], s2t_kv[1]   # make torchscript happy (cannot use tensor as tuple)
-
+        s2t_q = rearrange(s2t_q, 'b n (h d) -> b h n d', h=self.num_head)
+        s2t_kv = F.linear(input=s_x_pat, weight=self.s2t_kv.weight, bias=s2t_kv_bias)
+        s2t_kv = rearrange(s2t_kv, 'b n (e h d) -> e b h n d',e=2, h=self.num_head)
+        s2t_k, s2t_v = s2t_kv[0], s2t_kv[1]
+        
         s2t_q = s2t_q * self.scale
         s2t_attn = (s2t_q @ s2t_k.transpose(-2, -1))
-
         
         s2t_attn = s2t_attn.softmax(dim=-1)
-        s2t_attn = self.attn_drop(s2t_attn)
-
-        t_x = (s2t_attn @ s2t_v).transpose(1, 2).reshape(B, t_N, -1)
-        t_x = self.proj(t_x)
-        t_x = self.proj_drop(t_x)
+        
+        t_x = (s2t_attn @ s2t_v)
+        t_x = rearrange(t_x, 'b h n d -> b n (h d)')
+        t_x = self.t2s_proj(t_x)
+        t_x = rearrange(t_x, '(b t) n d -> b (t n) d', t=8)
         return t_x
+
+    def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
+        return self.t2s_cross_attn(s_x, t_x)
 
 
 # this codes from CLIP github(https://github.com/openai/CLIP)
@@ -293,7 +282,6 @@ class Block(nn.Module):
         self.num_heads = num_heads
         self.scale = 0.5
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.act = act_layer
         
         ###################################### MHSA code #####################################
         ############################ AIM MHSA ###########################
@@ -312,12 +300,12 @@ class Block(nn.Module):
         #########################################################################################
         
         ###################################### Cross attention ####################################
-        self.cross_s_down = nn.Linear(dim, dim//2)
-        self.cross_t_down = nn.Linear(dim, dim//2)
-        self.ln_s_cross = norm_layer(dim//2)
-        self.ln_t_cross = norm_layer(dim//2)
-        self.t2s_cross = CrossAttentionT2S(dim//2, n_head=num_heads)
-        self.cross_s_up = nn.Linear(dim//2, dim)
+        self.ln_s_cross = norm_layer(dim)
+        self.ln_t_cross = norm_layer(dim)
+        # self.t2s_cross = CrossAttentionT2S(dim=dim, n_head=num_heads)
+        self.s2t_cross = CrossAttentionS2T(dim, n_head=num_heads)
+        # self.cross_t2s_Adapter = Adapter(dim, skip_connect=False)
+        self.cross_s2t_Adapter = Adapter(dim, skip_connect=False)
         ###########################################################################################
         
         ###################################### FFN code #########################################
@@ -359,10 +347,12 @@ class Block(nn.Module):
         ########################################################################
         
         ############################ Cross Forward #############################
-        n_s_x = self.ln_s_cross(self.act(self.cross_s_down(s_x)))
-        n_t_x = self.ln_t_cross(self.act(self.cross_t_down(t_x)))
-        c_s_x = self.cross_s_up(self.t2s_cross(n_s_x, n_t_x))
-        s_x = s_x + self.drop_path(c_s_x)
+        s_x = self.ln_s_cross(s_x)
+        t_x = self.ln_t_cross(t_x)
+        # c_s_x = self.cross_t2s_Adapter(self.t2s_cross(s_x, t_x))
+        c_t_x = self.cross_s2t_Adapter(self.s2t_cross(s_x, t_x))
+        # s_x = s_x + self.drop_path(c_s_x)
+        t_x = t_x + self.drop_path(c_t_x)
         #########################################################################
         
         ############################ FFN Forward ##################################
@@ -535,7 +525,7 @@ class STCrossTransformer(nn.Module):
         s_x = s_x.permute(1,0,2)
         
         s_x = rearrange(s_x, '(b t) n d -> b t n d', b=B)
-        s_x = self.clip_ln_post(s_x[:,:,0,:].mean(1)) # all patch avg pooling
+        s_x = self.clip_ln_post(s_x[:,:,0,:].mean(1)) # all cls tokens avg pooling
         t_x = self.vmae_fc_norm(t_x.mean(1)) # all patch avg pooling
         
         return s_x, t_x

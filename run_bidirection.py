@@ -122,7 +122,7 @@ def get_args():
                         help='cutmix min/max ratio, overrides alpha and enables cutmix if set (default: None)')
     parser.add_argument('--mixup_prob', type=float, default=1.0,
                         help='Probability of performing mixup or cutmix when either/both is enabled')
-    parser.add_argument('--mixup_switch_prob', type=float, default=0.5,
+    parser.add_argument('--mixup_switch_prob', type=float, default=0.5, ## 이부분을 조금 더 낮은 비율로 낮춰봐야겠다.
                         help='Probability of switching to cutmix when both mixup and cutmix enabled')
     parser.add_argument('--mixup_mode', type=str, default='batch',
                         help='How to apply mixup/cutmix params. Per "batch", "pair", or "elem"')

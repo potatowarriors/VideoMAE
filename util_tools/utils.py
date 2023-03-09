@@ -294,7 +294,7 @@ def init_distributed_mode(args):
     print('| distributed init (rank {}): {}, gpu {}'.format(
         args.rank, args.dist_url, args.gpu), flush=True)
     torch.distributed.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
-                                         world_size=args.world_size, rank=args.rank)
+                                         world_size=args.world_size, rank=args.rank, timeout=datetime.timedelta(seconds=200000))
     torch.distributed.barrier()
     # assert torch.distributed.is_initialized()
     setup_for_distributed(args.rank == 0)
