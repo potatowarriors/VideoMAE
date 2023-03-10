@@ -354,8 +354,12 @@ class Block(nn.Module):
         ############################ Cross Forward #############################
         n_s_x = self.ln_s_cross(self.cross_s_down(s_x))
         n_t_x = self.ln_t_cross(self.cross_t_down(t_x))
-        c_s_x = self.cross_s_up(self.act(self.t2s_cross(n_s_x, n_t_x)))
-        c_t_x = self.cross_t_up(self.act(self.s2t_cross(n_s_x, n_t_x)))
+        # c_s_x = self.cross_s_up(self.act(self.t2s_cross(n_s_x, n_t_x)))
+        # c_t_x = self.cross_t_up(self.act(self.s2t_cross(c_s_x, n_t_x)))
+        c_s_x = self.t2s_cross(n_s_x, n_t_x)
+        c_t_x = self.s2t_cross(c_s_x, n_t_x)
+        c_s_x = self.cross_s_up(self.act(c_s_x))
+        c_t_x = self.cross_t_up(self.act(c_t_x))
         s_x = s_x + self.drop_path(c_s_x)
         t_x = t_x + self.drop_path(c_t_x)
         #########################################################################
