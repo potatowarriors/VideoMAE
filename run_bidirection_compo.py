@@ -18,10 +18,9 @@ from timm.utils import ModelEma
 from util_tools.optim_factory import create_optimizer, get_parameter_groups, LayerDecayValueAssigner
 
 from dataset.datasets import build_dataset
-from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, freeze_block, unfreeze_block, read_alpha, focal_loss
-from util_tools.utils import cross_multiple_samples_collate, notice_message, laod_eval_weights
+from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, unfreeze_block
+from util_tools.utils import multiple_samples_collate, notice_message, laod_eval_weights
 import util_tools.utils as utils
-import clip_models.clip as clip
 import videomae_models.bidir_modeling_crossattn
 
 
@@ -266,7 +265,7 @@ def main(args, ds_init):
         log_writer = None
 
     if args.num_sample > 1:
-        collate_func = partial(cross_multiple_samples_collate, fold=False)
+        collate_func = partial(multiple_samples_collate, fold=False)
     else:
         collate_func = None
 
@@ -336,7 +335,7 @@ def main(args, ds_init):
         load_bidir_weights(model, args)
     
     ###### VMAE 검증을 위해 freeze는 잠시 꺼둔다 #############
-    model, unfreeze_list = unfreeze_block(model, ['cross', 'clip_temporal_embedding', 'space_time_pos', 'Adapter', 'ln_post', 'vmae_fc_norm','last_proj','head'])
+    model, unfreeze_list = unfreeze_block(model, ['cross', 'clip_temporal_embedding', 'space_time_pos', 'sapce_pos', 'Adapter', 'ln_post', 'vmae_fc_norm','last_proj','head'])
     print('unfreeze list :', unfreeze_list)
     
     model.to(device)
@@ -439,10 +438,12 @@ def main(args, ds_init):
         torch.distributed.barrier()
         if global_rank == 0:
             print("Start merging results...")
-            final_top1 ,final_top5 = merge(args.output_dir, num_tasks)
-            print(f"Accuracy of the network on the {len(dataset_test)} test videos: Top-1: {final_top1:.2f}%, Top-5: {final_top5:.2f}%")
-            log_stats = {'Final top-1': final_top1, 
-                         'Final Top-5': final_top5}
+            final_top1_action ,final_top5_action, final_top1_noun, final_top5_noun, final_top1_verb, final_top5_verb = merge(args.output_dir, num_tasks)
+            print(f"Accuracy of the network on the {len(dataset_test)} test videos: Top-1: {final_top1_action:.2f}%, Top-5: {final_top5_action:.2f}%")
+            log_stats = {'Final Top-1 Action': final_top1_action,
+                        'Final Top-5 Action': final_top5_action,
+                        'Final Top-1 Noun': final_top1_noun,
+                        'Final Top-1 Verb': final_top1_verb}
             if args.output_dir and utils.is_main_process():
                 with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                     f.write(json.dumps(log_stats) + "\n")
@@ -534,7 +535,7 @@ def main(args, ds_init):
             'text' : cluster,
             }
             attach_list=[attach_dict] 
-            contents=f"Training time is {job_time}\n Top 1 Accuracy is {final_top1}"
+            contents=f"Training time is {job_time}\n Top 1 Accuracy is {final_top1_action}"
             notice_message(Token, "#notice-job", contents, attach_list)
     
 

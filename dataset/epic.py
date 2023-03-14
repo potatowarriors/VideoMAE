@@ -97,7 +97,7 @@ class EpicVideoClsDataset(Dataset):
                     label_list = []
                     index_list = []
                     for _ in range(args.num_sample):
-                         new_frames = self.aug_frame(buffer, args)
+                         new_frames = self._aug_frame(buffer, args)
                          label = self.label_array[index]
                          frame_list.append(new_frames)
                          label_list.append(label)

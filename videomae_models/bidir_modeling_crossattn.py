@@ -181,8 +181,7 @@ class CrossAttentionS2T(nn.Module):
         head_dim = dim // self.num_head
         self.scale = head_dim ** -0.5
         all_head_dim = head_dim * self.num_head
-        scale = dim ** -0.5
-        self.space_time_pos = nn.Parameter(scale * torch.randn((197 * 8, dim)))
+        self.space_time_pos = nn.Parameter(self.scale * torch.randn((197 * 8, dim)))
         
         #여기에 cross attn t2s module이 들어가야 한다.
         self.s2t_q = nn.Linear(dim, all_head_dim, bias=False)
@@ -222,17 +221,16 @@ class CrossAttentionS2T(nn.Module):
 
 
 # this codes from CLIP github(https://github.com/openai/CLIP)
-class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여기에 cross s2t_attn layer가 추가되어야 한다.
+class CrossAttentionT2S(nn.Module):
     def __init__(self, dim: int, n_head: int, attn_mask: torch.Tensor = None):
         super().__init__()
 
-        # add for cross-attn
         self.num_head = n_head
         head_dim = dim // self.num_head
         self.scale = head_dim ** -0.5
         all_head_dim = head_dim * self.num_head
+        # self.space_pos = nn.Parameter(self.scale * torch.randn((8, dim))) 왠지 original vmae에 nosie가 되는거같다 끄고 해보자.
         
-        #여기에 cross attn t2s module이 들어가야 한다.
         self.t2s_q = nn.Linear(dim, all_head_dim, bias=False) # 197 tokens(cls+patch) * num_frames
         self.t2s_q_bias = nn.Parameter(torch.zeros(all_head_dim))
         self.t2s_kv = nn.Linear(dim, all_head_dim * 2, bias=False)
@@ -247,6 +245,7 @@ class CrossAttentionT2S(nn.Module): # 이게 VMAE로 치면 blocks class다. 여
         s_x_cls, s_x_pat = s_x[0, :, :], s_x[1:, :, :]
         s_x_pat = rearrange(s_x_pat, 'n (b t) d -> (b n) t d', b=B) # batch -> token
         t_x = rearrange(t_x, 'b (t n) d -> (b n) t d', t=8)
+        # t_x = t_x + self.space_pos
         t2s_q_bias = self.t2s_q_bias
         t2s_kv_bias = self.t2s_kv_bias
         
@@ -309,8 +308,6 @@ class Block(nn.Module):
         self.s2t_cross = CrossAttentionS2T(dim//2, n_head=num_heads)
         self.cross_s_up = nn.Linear(dim//2, dim)
         self.cross_t_up = nn.Linear(dim//2, dim)
-        # self.cross_t2s_Adapter = Adapter(dim, skip_connect=False)
-        # self.cross_s2t_Adapter = Adapter(dim, skip_connect=False)
         ###########################################################################################
         
         ###################################### FFN code #########################################
@@ -354,12 +351,8 @@ class Block(nn.Module):
         ############################ Cross Forward #############################
         n_s_x = self.ln_s_cross(self.cross_s_down(s_x))
         n_t_x = self.ln_t_cross(self.cross_t_down(t_x))
-        # c_s_x = self.cross_s_up(self.act(self.t2s_cross(n_s_x, n_t_x)))
-        # c_t_x = self.cross_t_up(self.act(self.s2t_cross(c_s_x, n_t_x)))
-        c_t_x = self.s2t_cross(n_s_x, n_t_x)
-        c_s_x = self.t2s_cross(n_s_x, c_t_x)
-        c_s_x = self.cross_s_up(self.act(c_s_x))
-        c_t_x = self.cross_t_up(self.act(c_t_x))
+        c_s_x = self.cross_s_up(self.act(self.t2s_cross(n_s_x, n_t_x)))
+        c_t_x = self.cross_t_up(self.act(self.s2t_cross(n_s_x, n_t_x)))
         s_x = s_x + self.drop_path(c_s_x)
         t_x = t_x + self.drop_path(c_t_x)
         #########################################################################
