@@ -243,8 +243,12 @@ class CrossAttentionT2S(nn.Module):
     def t2s_cross_attn(self, s_x, t_x): # s_x=[n (b t) d], t_x=[b n d]
         B, _, _ = t_x.shape
         s_x_cls, s_x_pat = s_x[0, :, :], s_x[1:, :, :]
-        s_x_pat = rearrange(s_x_pat, 'n (b t) d -> (b n) t d', b=B) # batch -> token
-        t_x = rearrange(t_x, 'b (t n) d -> (b n) t d', t=8)
+        s_x_pat = rearrange(s_x_pat, '(s n) (b t) d -> b t s n d', b=B, s=14) #[b t 14 14 d]
+        s_x_pat = rearrange(s_x_pat, 'b t (qy y) (qx x) d -> (b qy qx) (t y x) d', y=2, x=2) # [(b 나머지 토큰), (t 2x2 tube), d]
+        # s_x_pat = rearrange(s_x_pat, 'n (b t) d -> (b n) t d', b=B) # batch -> token
+        t_x = rearrange(t_x, 'b (t n) d -> b t n d', t=8)
+        t_x = rearrange(t_x, 'b t (s n) d -> b t s n d', s=14)
+        t_x = rearrange(t_x, 'b t (qy y) (qx x) d -> (b qy qx) (t y x) d', y=2, x=2)
         # t_x = t_x + self.space_pos
         t2s_q_bias = self.t2s_q_bias
         t2s_kv_bias = self.t2s_kv_bias
@@ -263,7 +267,9 @@ class CrossAttentionT2S(nn.Module):
         s_x_pat = (t2s_attn @ t2s_v)
         s_x_pat = rearrange(s_x_pat, 'b h n d -> b n (h d)')
         s_x_pat = self.t2s_proj(s_x_pat)
-        s_x_pat = rearrange(s_x_pat,'(b n) t d -> n (b t) d', b=B)
+        # s_x_pat = rearrange(s_x_pat,'(b n) t d -> n (b t) d', b=B)
+        s_x_pat = rearrange(s_x_pat, '(b qy qx) (t y x) d -> b t (qy y) (qx x) d', qy=7,qx=7,y=2,x=2)
+        s_x_pat = rearrange(s_x_pat, 'b t s n d -> (s n) (b t) d') # [n (b t) d]
         s_x = torch.cat([s_x_cls.unsqueeze(0), s_x_pat], dim=0)
         return s_x
 
@@ -406,7 +412,7 @@ class STCrossTransformer(nn.Module):
         self.clip_conv1 = nn.Conv2d(in_channels=3, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size, bias=False)
         self.clip_class_embedding = nn.Parameter(scale * torch.randn(embed_dim))
         self.clip_positional_embedding = nn.Parameter(scale * torch.randn((img_size // patch_size) ** 2 + 1, embed_dim))
-        self.clip_temporal_embedding = nn.Parameter(torch.zeros(1, 8, embed_dim))
+        self.clip_temporal_embedding = nn.Parameter(torch.zeros(1, 8*4, embed_dim))
         self.clip_ln_pre = LayerNorm(embed_dim)
 
         if use_learnable_pos_emb:
@@ -504,12 +510,18 @@ class STCrossTransformer(nn.Module):
         s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
         s_x = s_x.reshape(s_x.shape[0], s_x.shape[1], -1) # [*, embeddim, grid**2]
         s_x = s_x.permute(0, 2, 1) # shape[batch, patchnum, embeddim]
+        
+        #새로운 view의 position embedding을 더해주자.
+        s_x = rearrange(s_x, '(b t) (s n) d -> b t s n d', b=B, s=14) #[b t 14 14 d]
+        s_x = rearrange(s_x, 'b t (qy y) (qx x) d -> (b qy qx) (t y x) d', y=2, x=2) # [(b 나머지 토큰), (t 2x2 tube), d]
+        s_x = s_x + self.clip_temporal_embedding
+        s_x = rearrange(s_x, '(b qy qx) (t y x) d -> b t (qy y) (qx x) d', qy=7,qx=7,y=2,x=2)
+        s_x = rearrange(s_x, 'b t s n d -> (b t) (s n) d') # [b n d]
+        
         s_x = torch.cat([self.clip_class_embedding.to(s_x.dtype) + torch.zeros(s_x.shape[0], 1, s_x.shape[-1], dtype=s_x.dtype, device=s_x.device), s_x], dim=1)
         s_x = s_x + self.clip_positional_embedding.to(s_x.dtype)
         n = s_x.shape[1]
-        s_x = rearrange(s_x, '(b t) n d -> (b n) t d', t=s_t)
-        s_x = s_x + self.clip_temporal_embedding
-        s_x = rearrange(s_x, '(b n) t d -> (b t) n d', n=n)
+
         s_x = self.clip_ln_pre(s_x)
         #####################################################################
         
