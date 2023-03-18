@@ -300,14 +300,12 @@ class Block(nn.Module):
         #########################################################################################
         
         ###################################### Cross attention ####################################
-        self.cross_s_down = nn.Linear(dim, dim//2)
-        self.cross_t_down = nn.Linear(dim, dim//2)
-        self.ln_s_cross = norm_layer(dim//2)
-        self.ln_t_cross = norm_layer(dim//2)
-        self.t2s_cross = CrossAttentionT2S(dim//2, n_head=num_heads)
-        self.s2t_cross = CrossAttentionS2T(dim//2, n_head=num_heads)
-        self.cross_s_up = nn.Linear(dim//2, dim)
-        self.cross_t_up = nn.Linear(dim//2, dim)
+        self.ln_s_cross = norm_layer(dim)
+        self.ln_t_cross = norm_layer(dim)
+        self.t2s_cross = CrossAttentionT2S(dim, n_head=num_heads)
+        self.s2t_cross = CrossAttentionS2T(dim, n_head=num_heads)
+        self.t2s_Adapter = Adapter(dim, skip_connect=False)
+        self.s2t_Adapter = Adapter(dim, skip_connect=False)
         ###########################################################################################
         
         ###################################### FFN code #########################################
@@ -349,10 +347,10 @@ class Block(nn.Module):
         ########################################################################
         
         ############################ Cross Forward #############################
-        n_s_x = self.ln_s_cross(self.cross_s_down(s_x))
-        n_t_x = self.ln_t_cross(self.cross_t_down(t_x))
-        c_s_x = self.cross_s_up(self.act(self.t2s_cross(n_s_x, n_t_x)))
-        c_t_x = self.cross_t_up(self.act(self.s2t_cross(n_s_x, n_t_x)))
+        n_s_x = self.ln_s_cross(s_x)
+        n_t_x = self.ln_t_cross(t_x)
+        c_s_x = self.t2s_Adapter(self.t2s_cross(n_s_x, n_t_x))
+        c_t_x = self.s2t_Adapter(self.s2t_cross(n_s_x, n_t_x))
         s_x = s_x + self.drop_path(c_s_x)
         t_x = t_x + self.drop_path(c_t_x)
         #########################################################################
