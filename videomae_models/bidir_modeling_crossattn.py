@@ -431,13 +431,16 @@ class STCrossTransformer(nn.Module):
         self.vmae_fc_norm = norm_layer(embed_dim)
         
         if self.composition:
+            self.drop_path = DropPath(0.2)
             self.head_verb = nn.Linear(embed_dim, 97)
+            self.head_verb_Adapter = Adapter(embed_dim, skip_connect=False)
             self.head_verb_dropout = nn.Dropout(head_drop_rate)
             self.head_noun = nn.Linear(embed_dim, 300)
+            self.head_noun_Adapter = Adapter(embed_dim, skip_connect=False)
             self.head_noun_dropout = nn.Dropout(head_drop_rate)
         else:
-            self.fusion_s_proj = nn.Linear(embed_dim, embed_dim)
-            self.fusion_t_proj = nn.Linear(embed_dim, embed_dim)
+            self.head_verb_Adapter = Adapter(embed_dim, skip_connect=False)
+            self.head_noun_Adapter = Adapter(embed_dim, skip_connect=False)
             self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
         if use_learnable_pos_emb:
@@ -445,16 +448,17 @@ class STCrossTransformer(nn.Module):
 
         self.apply(self._init_weights)
         self._init_adpater_weight()
+        nn.init.constant_(self.head_noun_Adapter.D_fc2.weight, 0)
+        nn.init.constant_(self.head_noun_Adapter.D_fc2.bias, 0)
+        nn.init.constant_(self.head_verb_Adapter.D_fc2.weight, 0)
+        nn.init.constant_(self.head_verb_Adapter.D_fc2.bias, 0)
         
         if self.composition:
-            # trunc_normal_(self.head_noun.weight, std=.02)
-            # trunc_normal_(self.head_verb.weight, std=.02)
             self.head_verb.weight.data.mul_(init_scale)
             self.head_verb.bias.data.mul_(init_scale)
             self.head_noun.weight.data.mul_(init_scale)
             self.head_noun.bias.data.mul_(init_scale)
         else:
-            # trunc_normal_(self.head.weight, std=.02)
             self.head.weight.data.mul_(init_scale)
             self.head.bias.data.mul_(init_scale)
 
@@ -531,57 +535,18 @@ class STCrossTransformer(nn.Module):
         t_x = self.vmae_fc_norm(t_x.mean(1)) # all patch avg pooling
         
         return s_x, t_x
-    
-    def forward_fusion_features(self, x):
-        B = x.shape[0]
-        clip_start_frame=random.randint(0,1)
-        s_x = x[:, :, clip_start_frame::2, :, :] # pick even or odd frames (8 frame)
-        ######################## AIM spatial path #########################
-        s_t = s_x.shape[2]
-        s_x = rearrange(s_x, 'b c t h w -> (b t) c h w')
-        s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
-        s_x = s_x.reshape(s_x.shape[0], s_x.shape[1], -1) # [*, embeddim, grid**2]
-        s_x = s_x.permute(0, 2, 1) # shape[batch, patchnum, embeddim]
-        s_x = torch.cat([self.clip_class_embedding.to(s_x.dtype) + torch.zeros(s_x.shape[0], 1, s_x.shape[-1], dtype=s_x.dtype, device=s_x.device), s_x], dim=1)
-        s_x = s_x + self.clip_positional_embedding.to(s_x.dtype)
-        n = s_x.shape[1]
-        s_x = rearrange(s_x, '(b t) n d -> (b n) t d', t=s_t)
-        s_x = s_x + self.clip_temporal_embedding
-        s_x = rearrange(s_x, '(b n) t d -> (b t) n d', n=n)
-        s_x = self.clip_ln_pre(s_x)
-        #####################################################################
-        
-        ######################## VMAE spatial path #########################
-        t_x = self.patch_embed(x)
-
-        if self.pos_embed is not None:
-            t_x = t_x + self.pos_embed.expand(B, -1, -1).type_as(t_x).to(t_x.device).clone().detach()
-        t_x = self.pos_drop(t_x)
-        #####################################################################
-        
-        s_x = s_x.permute(1,0,2)
-        for blk in self.blocks:
-            s_x, t_x = blk(s_x, t_x)
-        s_x = s_x.permute(1,0,2)
-        
-        s_x = rearrange(s_x, '(b t) n d -> b t n d', b=B)
-        s_x = self.clip_ln_post(s_x[:,:,0,:].mean(1)) # all cls tokens avg pooling
-        t_x = self.vmae_fc_norm(t_x.mean(1)) # all patch avg pooling
-        x = s_x + t_x
-        
-        return x / 2.0
-
 
     def forward(self, x):
         if self.composition:
             s_x, t_x = self.forward_features(x)
-            s_x = self.head_noun_dropout(s_x)
+            s_x = s_x + self.drop_path(self.head_verb_Adapter(t_x))
+            t_x = t_x + self.drop_path(self.head_noun_Adapter(s_x))
             s_x = self.head_noun(s_x)
-            t_x = self.head_verb_dropout(t_x)
             t_x = self.head_verb(t_x)
             return s_x, t_x
         else:
-            x = self.forward_fusion_features(x)
+            s_x, t_x = self.forward_features(x)
+            x = self.head_noun_Adapter(s_x) + self.head_verb_Adapter(t_x)
             x = self.head(x)
             return x
 
