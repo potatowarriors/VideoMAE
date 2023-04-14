@@ -13,7 +13,7 @@
                "justMyCode": true,
                "args" : [
                     "--nproc_per_node", "1",
-                    "--master_port", "12330",
+                    "--master_port", "12331",
                     "/data/kide004/repos/VideoMAE/run_bidirection_compo.py",
                     "--vmae_model", "compo_bidir_vit_base_patch16_224",
                     "--data_set", "EPIC",
@@ -24,8 +24,8 @@
                     "--clip_finetune", "/data/kide004/repos/VideoMAE/pre-trained/ViT-B-16.pt",
                     "--log_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
                     "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
-                    "--batch_size", "2",
-                    "--num_sample", "2",
+                    "--batch_size", "4",
+                    "--num_sample", "1",
                     "--epochs", "3",
                     "--save_ckpt_freq", "1",
                     "--input_size", "224",
@@ -39,6 +39,7 @@
                     "--test_num_crop", "3",
                     "--enable_deepspeed",
                     "--dist_eval",
+                    "--head_drop_rate", "0.2",
                     "--warmup_epochs", "2",
                     "--composition"
                ]
