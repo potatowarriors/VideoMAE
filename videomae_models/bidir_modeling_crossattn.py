@@ -431,12 +431,9 @@ class STCrossTransformer(nn.Module):
         self.vmae_fc_norm = norm_layer(embed_dim)
         
         if self.composition:
-            self.drop_path = DropPath(0.2)
             self.head_verb = nn.Linear(embed_dim, 97)
-            self.head_verb_Adapter = Adapter(embed_dim, skip_connect=False)
             self.head_verb_dropout = nn.Dropout(head_drop_rate)
             self.head_noun = nn.Linear(embed_dim, 300)
-            self.head_noun_Adapter = Adapter(embed_dim, skip_connect=False)
             self.head_noun_dropout = nn.Dropout(head_drop_rate)
         else:
             self.head_verb_Adapter = Adapter(embed_dim, skip_connect=False)
@@ -448,10 +445,6 @@ class STCrossTransformer(nn.Module):
 
         self.apply(self._init_weights)
         self._init_adpater_weight()
-        nn.init.constant_(self.head_noun_Adapter.D_fc2.weight, 0)
-        nn.init.constant_(self.head_noun_Adapter.D_fc2.bias, 0)
-        nn.init.constant_(self.head_verb_Adapter.D_fc2.weight, 0)
-        nn.init.constant_(self.head_verb_Adapter.D_fc2.bias, 0)
         
         if self.composition:
             self.head_verb.weight.data.mul_(init_scale)
@@ -539,9 +532,9 @@ class STCrossTransformer(nn.Module):
     def forward(self, x):
         if self.composition:
             s_x, t_x = self.forward_features(x)
-            s_x = s_x + self.drop_path(self.head_verb_Adapter(t_x))
-            t_x = t_x + self.drop_path(self.head_noun_Adapter(s_x))
+            s_x = self.head_noun_dropout(s_x)
             s_x = self.head_noun(s_x)
+            t_x = self.head_verb_dropout(t_x)
             t_x = self.head_verb(t_x)
             return s_x, t_x
         else:
