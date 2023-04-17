@@ -284,34 +284,11 @@ class Block(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.act = act_layer()
         
-        ###################################### MHSA code #####################################
         ############################ AIM MHSA ###########################
         self.clip_ln_1 = LayerNorm(dim)
         self.clip_attn = nn.MultiheadAttention(dim, num_heads)
-        self.S_Adapter = Adapter(dim)
         ##################################################################
         
-        ############################ VMAE MHSA ###########################
-        self.norm1 = norm_layer(dim)
-        self.attn = Attention(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
-            attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
-        self.T_Adapter = Adapter(dim)
-        ##################################################################
-        #########################################################################################
-        
-        ###################################### Cross attention ####################################
-        self.cross_s_down = nn.Linear(dim, dim//2)
-        self.cross_t_down = nn.Linear(dim, dim//2)
-        self.ln_s_cross = norm_layer(dim//2)
-        self.ln_t_cross = norm_layer(dim//2)
-        self.t2s_cross = CrossAttentionT2S(dim//2, n_head=num_heads)
-        self.s2t_cross = CrossAttentionS2T(dim//2, n_head=num_heads)
-        self.cross_s_up = nn.Linear(dim//2, dim)
-        self.cross_t_up = nn.Linear(dim//2, dim)
-        ###########################################################################################
-        
-        ###################################### FFN code #########################################
         ############################ AIM FFN ###############################
         self.clip_ln_2 = LayerNorm(dim)
         self.clip_mlp = nn.Sequential(OrderedDict([
@@ -319,16 +296,8 @@ class Block(nn.Module):
             ("gelu", QuickGELU()),
             ("c_proj", nn.Linear(dim * 4, dim))
         ]))
-        self.S_MLP_Adapter = Adapter(dim, skip_connect=False)
         self.attn_mask = None
         #####################################################################
-        
-        ############################ VMAE FFN ###############################
-        self.norm2 = norm_layer(dim)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
-        self.T_MLP_Adapter = Adapter(dim, skip_connect=False)
-        #######################################################################
-        #########################################################################################
         
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -337,36 +306,17 @@ class Block(nn.Module):
         self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
         return self.clip_attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
 
-    def forward(self,s_x, t_x):
-        B = t_x.shape[0]
-        n, bt, _ = s_x.shape
-        num_frames = bt//B
-        
+    def forward(self,s_x):
         ############################ MHSA Forward #############################
-        # AIM Space MHSA
-        s_x = s_x + self.S_Adapter(self.attention(self.clip_ln_1(s_x))) # original space multi head self attention
-        # VMAE Time MHSA
-        t_x = t_x + self.T_Adapter(self.attn(self.norm1(t_x)))
+        # CLIP ablation model setting
+        s_x = s_x + self.attention(self.clip_ln_1(s_x)) # original space multi head self attention
         ########################################################################
         
-        ############################ Cross Forward #############################
-        n_s_x = self.ln_s_cross(self.cross_s_down(s_x))
-        n_t_x = self.ln_t_cross(self.cross_t_down(t_x))
-        c_s_x = self.cross_s_up(self.act(self.t2s_cross(n_s_x, n_t_x)))
-        c_t_x = self.cross_t_up(self.act(self.s2t_cross(n_s_x, n_t_x)))
-        s_x = s_x + self.drop_path(c_s_x)
-        t_x = t_x + self.drop_path(c_t_x)
-        #########################################################################
-        
         ############################ FFN Forward ##################################
-        s_xn = self.clip_ln_2(s_x)
-        s_x = s_x + self.clip_mlp(s_xn) + self.drop_path(self.scale * self.S_MLP_Adapter(s_xn))
-        
-        t_xn = self.norm2(t_x)
-        t_x = t_x + self.mlp(t_xn) + self.drop_path(self.scale * self.T_MLP_Adapter(t_xn))
+        s_x = s_x + self.clip_mlp(self.clip_ln_2(s_x))
         ############################################################################
         
-        return s_x, t_x
+        return s_x
     
 class STCrossTransformer(nn.Module):
     """ Vision Transformer with support for patch or hybrid CNN input stage
@@ -400,21 +350,12 @@ class STCrossTransformer(nn.Module):
         self.embed_dim = embed_dim  # num_features for consistency with other models
         self.tubelet_size = tubelet_size
         self.composition = composition
-        self.patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim, num_frames=all_frames, tubelet_size=self.tubelet_size)
-        num_patches = self.patch_embed.num_patches
         
         scale = embed_dim ** -0.5
         self.clip_conv1 = nn.Conv2d(in_channels=3, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size, bias=False)
         self.clip_class_embedding = nn.Parameter(scale * torch.randn(embed_dim))
         self.clip_positional_embedding = nn.Parameter(scale * torch.randn((img_size // patch_size) ** 2 + 1, embed_dim))
         self.clip_ln_pre = LayerNorm(embed_dim)
-
-        if use_learnable_pos_emb:
-            self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
-        else:
-            # sine-cosine positional embeddings is on the way
-            self.pos_embed = get_sinusoid_encoding_table(num_patches, embed_dim)
 
         self.pos_drop = nn.Dropout(p=drop_rate)
 
@@ -428,7 +369,6 @@ class STCrossTransformer(nn.Module):
             for i in range(depth)])
         
         self.clip_ln_post = LayerNorm(embed_dim)
-        self.vmae_fc_norm = norm_layer(embed_dim)
         
         if self.composition:
             self.head_verb = nn.Linear(embed_dim, 97)
@@ -500,7 +440,6 @@ class STCrossTransformer(nn.Module):
         B = x.shape[0]
         s_x = x[:, :, 1::2, :, :] # pick even frames (8 frame)
         ######################## AIM spatial path #########################
-        s_t = s_x.shape[2]
         s_x = rearrange(s_x, 'b c t h w -> (b t) c h w')
         s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
         s_x = s_x.reshape(s_x.shape[0], s_x.shape[1], -1) # [*, embeddim, grid**2]
@@ -510,31 +449,23 @@ class STCrossTransformer(nn.Module):
         s_x = self.clip_ln_pre(s_x)
         #####################################################################
         
-        ######################## VMAE spatial path #########################
-        t_x = self.patch_embed(x)
-
-        if self.pos_embed is not None:
-            t_x = t_x + self.pos_embed.expand(B, -1, -1).type_as(t_x).to(t_x.device).clone().detach()
-        t_x = self.pos_drop(t_x)
-        #####################################################################
         
         s_x = s_x.permute(1,0,2)
         for blk in self.blocks:
-            s_x, t_x = blk(s_x, t_x)
+            s_x = blk(s_x)
         s_x = s_x.permute(1,0,2)
         
         s_x = rearrange(s_x, '(b t) n d -> b t n d', b=B)
         s_x = self.clip_ln_post(s_x[:,:,0,:].mean(1)) # all cls tokens avg pooling
-        t_x = self.vmae_fc_norm(t_x.mean(1)) # all patch avg pooling
         
-        return s_x, t_x
+        return s_x
 
     def forward(self, x):
         if self.composition:
-            s_x, t_x = self.forward_features(x)
-            s_x = self.head_noun_dropout(s_x)
+            x = self.forward_features(x)
+            s_x = self.head_noun_dropout(x)
             s_x = self.head_noun(s_x)
-            t_x = self.head_verb_dropout(t_x)
+            t_x = self.head_verb_dropout(x)
             t_x = self.head_verb(t_x)
             return s_x, t_x
         else:
