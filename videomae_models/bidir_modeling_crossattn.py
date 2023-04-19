@@ -181,7 +181,8 @@ class CrossAttentionS2T(nn.Module):
         head_dim = dim // self.num_head
         self.scale = head_dim ** -0.5
         all_head_dim = head_dim * self.num_head
-        self.clip_space_time_pos = nn.Parameter(self.scale * torch.randn((197 * 8, dim)))
+        self.clip_time_pos = nn.Parameter(self.scale * torch.randn((8, dim)))
+        self.vmae_time_pos = nn.Parameter(self.scale * torch.randn((8, dim)))
         
         #여기에 cross attn t2s module이 들어가야 한다.
         self.s2t_q = nn.Linear(dim, all_head_dim, bias=False)
@@ -195,14 +196,17 @@ class CrossAttentionS2T(nn.Module):
     
     def s2t_cross_attn(self, s_x, t_x): # s_x=[n (b t) d], t_x=[b n d]
         B, _, _ = t_x.shape
-        s_x = rearrange(s_x, 'n (b t) d -> b (t n) d', b=B) # batch -> token
-        s_x = s_x + self.clip_space_time_pos ## sapce time position encoding
+        s_x_pat = s_x[1:, :, :]
+        s_x_pat = rearrange(s_x_pat, 'n (b t) d -> (b n) t d', b=B) # batch -> token
+        s_x_pat = s_x_pat + self.clip_time_pos
+        t_x = rearrange(t_x, 'b (t n) d -> (b n) t d', t=8)
+        t_x = t_x + self.vmae_time_pos
         s2t_q_bias = self.s2t_q_bias
         s2t_kv_bias = self.s2t_kv_bias
         
         s2t_q = F.linear(input=t_x, weight=self.s2t_q.weight, bias=s2t_q_bias)
         s2t_q = rearrange(s2t_q, 'b n (h d) -> b h n d', h=self.num_head)
-        s2t_kv = F.linear(input=s_x, weight=self.s2t_kv.weight, bias=s2t_kv_bias)
+        s2t_kv = F.linear(input=s_x_pat, weight=self.s2t_kv.weight, bias=s2t_kv_bias)
         s2t_kv = rearrange(s2t_kv, 'b n (e h d) -> e b h n d',e=2, h=self.num_head)
         s2t_k, s2t_v = s2t_kv[0], s2t_kv[1]
         
@@ -212,8 +216,9 @@ class CrossAttentionS2T(nn.Module):
         s2t_attn = s2t_attn.softmax(dim=-1)
         
         t_x = (s2t_attn @ s2t_v)
-        t_x = rearrange(t_x, 'b h n d -> b n (h d)')
+        t_x = rearrange(t_x, 'b h t d -> b t (h d)')
         t_x = self.t2s_proj(t_x)
+        t_x = rearrange(t_x, '(b n) t d -> b (t n) d', b=B)
         return t_x
 
     def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
@@ -230,7 +235,7 @@ class CrossAttentionT2S(nn.Module):
         self.scale = head_dim ** -0.5
         all_head_dim = head_dim * self.num_head
         self.clip_time_pos = nn.Parameter(self.scale * torch.randn((8, dim)))
-        self.vmae_time_pos = nn.Parameter(self.scale * torch.randn((8, dim))) #왠지 original vmae에 nosie가 되는거같다 끄고 해보자.
+        self.vmae_time_pos = nn.Parameter(self.scale * torch.randn((8, dim)))
         
         self.t2s_q = nn.Linear(dim, all_head_dim, bias=False) # 197 tokens(cls+patch) * num_frames
         self.t2s_q_bias = nn.Parameter(torch.zeros(all_head_dim))
