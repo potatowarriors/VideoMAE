@@ -305,8 +305,8 @@ class Block(nn.Module):
         self.ln_t_cross = norm_layer(dim)
         self.t2s_cross = CrossAttentionT2S(dim, n_head=num_heads)
         self.s2t_cross = CrossAttentionS2T(dim, n_head=num_heads)
-        self.t2s_Adapter = Adapter(dim)
-        self.s2t_Adapter = Adapter(dim)
+        self.t2s_Adapter = Adapter(dim, skip_connect=False)
+        self.s2t_Adapter = Adapter(dim, skip_connect=False)
         ###########################################################################################
         
         ###################################### FFN code #########################################
