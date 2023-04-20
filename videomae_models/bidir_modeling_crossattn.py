@@ -288,7 +288,6 @@ class Block(nn.Module):
         ############################ AIM MHSA ###########################
         self.clip_ln_1 = LayerNorm(dim)
         self.clip_attn = nn.MultiheadAttention(dim, num_heads)
-        self.S_Adapter = Adapter(dim)
         ##################################################################
         
         ############################ VMAE MHSA ###########################
@@ -296,20 +295,8 @@ class Block(nn.Module):
         self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
-        self.T_Adapter = Adapter(dim)
         ##################################################################
         #########################################################################################
-        
-        ###################################### Cross attention ####################################
-        self.cross_s_down = nn.Linear(dim, dim//2)
-        self.cross_t_down = nn.Linear(dim, dim//2)
-        self.ln_s_cross = norm_layer(dim//2)
-        self.ln_t_cross = norm_layer(dim//2)
-        self.t2s_cross = CrossAttentionT2S(dim//2, n_head=num_heads)
-        self.s2t_cross = CrossAttentionS2T(dim//2, n_head=num_heads)
-        self.cross_s_up = nn.Linear(dim//2, dim)
-        self.cross_t_up = nn.Linear(dim//2, dim)
-        ###########################################################################################
         
         ###################################### FFN code #########################################
         ############################ AIM FFN ###############################
@@ -319,14 +306,12 @@ class Block(nn.Module):
             ("gelu", QuickGELU()),
             ("c_proj", nn.Linear(dim * 4, dim))
         ]))
-        self.S_MLP_Adapter = Adapter(dim, skip_connect=False)
         self.attn_mask = None
         #####################################################################
         
         ############################ VMAE FFN ###############################
         self.norm2 = norm_layer(dim)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
-        self.T_MLP_Adapter = Adapter(dim, skip_connect=False)
         #######################################################################
         #########################################################################################
         
@@ -344,27 +329,26 @@ class Block(nn.Module):
         
         ############################ MHSA Forward #############################
         # AIM Space MHSA
-        s_x = s_x + self.S_Adapter(self.attention(self.clip_ln_1(s_x))) # original space multi head self attention
+        s_x = s_x + self.drop_path(self.attention(self.clip_ln_1(s_x))) # original space multi head self attention
         # VMAE Time MHSA
-        t_x = t_x + self.T_Adapter(self.attn(self.norm1(t_x)))
+        t_x = t_x + self.drop_path(self.attn(self.norm1(t_x)))
         ########################################################################
         
-        ############################ Cross Forward #############################
-        n_s_x = self.ln_s_cross(self.cross_s_down(s_x))
-        n_t_x = self.ln_t_cross(self.cross_t_down(t_x))
-        c_s_x = self.cross_s_up(self.act(self.t2s_cross(n_s_x, n_t_x)))
-        c_t_x = self.cross_t_up(self.act(self.s2t_cross(n_s_x, n_t_x)))
-        s_x = s_x + self.drop_path(c_s_x)
-        t_x = t_x + self.drop_path(c_t_x)
-        #########################################################################
-        
         ############################ FFN Forward ##################################
-        s_xn = self.clip_ln_2(s_x)
-        s_x = s_x + self.clip_mlp(s_xn) + self.drop_path(self.scale * self.S_MLP_Adapter(s_xn))
-        
-        t_xn = self.norm2(t_x)
-        t_x = t_x + self.mlp(t_xn) + self.drop_path(self.scale * self.T_MLP_Adapter(t_xn))
+        s_x = s_x + self.drop_path(self.clip_mlp(self.clip_ln_2(s_x)))
+        t_x = t_x + self.drop_path(self.mlp(self.norm2(t_x)))
         ############################################################################
+        
+        ###########################lateral connect T2S##############################
+        cls_tokens, s_x = s_x[0, :, :].unsqueeze(0), s_x[1:, :, :]
+        
+        temp_s_x = rearrange(s_x, 'n (b t) d -> b (t n) d', t=8).contiguous()
+        temp_t_x = rearrange(t_x, 'b (t n) d -> n (b t) d', t=8).contiguous()
+        s_x = s_x + temp_t_x
+        t_x = t_x + temp_s_x
+        s_x = torch.cat((cls_tokens, s_x), dim=0)
+
+        
         
         return s_x, t_x
     

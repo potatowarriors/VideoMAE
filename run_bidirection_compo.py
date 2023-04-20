@@ -336,8 +336,8 @@ def main(args, ds_init):
         load_bidir_weights(model, args)
     
     ###### VMAE 검증을 위해 freeze는 잠시 꺼둔다 #############
-    model, unfreeze_list = unfreeze_block(model, ['cross', 'clip_space_time_pos', 'clip_time_pos', 'vmae_time_pos', 'Adapter', 'ln_post', 'vmae_fc_norm','last_proj','head'])
-    print('unfreeze list :', unfreeze_list)
+    # model, unfreeze_list = unfreeze_block(model, ['cross', 'clip_space_time_pos', 'clip_time_pos', 'vmae_time_pos', 'Adapter', 'ln_post', 'vmae_fc_norm','last_proj','head'])
+    # print('unfreeze list :', unfreeze_list)
     
     model.to(device)
     
