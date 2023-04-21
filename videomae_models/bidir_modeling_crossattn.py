@@ -299,15 +299,6 @@ class Block(nn.Module):
         ##################################################################
         #########################################################################################
         
-        ###################################### Cross attention ####################################
-        self.ln_s_cross = norm_layer(dim)
-        self.ln_t_cross = norm_layer(dim)
-        self.t2s_cross = CrossAttentionT2S(dim, n_head=num_heads)
-        self.s2t_cross = CrossAttentionS2T(dim, n_head=num_heads)
-        self.t2s_Adapter = Adapter(dim, skip_connect=False)
-        self.s2t_Adapter = Adapter(dim, skip_connect=False)
-        ###########################################################################################
-        
         ###################################### FFN code #########################################
         ############################ AIM FFN ###############################
         self.clip_ln_2 = LayerNorm(dim)
@@ -345,15 +336,6 @@ class Block(nn.Module):
         # VMAE Time MHSA
         t_x = t_x + self.T_Adapter(self.attn(self.norm1(t_x)))
         ########################################################################
-        
-        ############################ Cross Forward #############################
-        n_s_x = self.ln_s_cross(s_x)
-        n_t_x = self.ln_t_cross(t_x)
-        c_s_x = self.t2s_Adapter(self.t2s_cross(n_s_x, n_t_x))
-        c_t_x = self.s2t_Adapter(self.s2t_cross(n_s_x, n_t_x))
-        s_x = s_x + self.drop_path(c_s_x)
-        t_x = t_x + self.drop_path(c_t_x)
-        #########################################################################
         
         ############################ FFN Forward ##################################
         s_xn = self.clip_ln_2(s_x)
