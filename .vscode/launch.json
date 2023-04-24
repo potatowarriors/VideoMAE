@@ -24,7 +24,7 @@
                     "--clip_finetune", "/data/hyogunlee/repos/VideoMAE/pre-trained/ViT-B-16.pt",
                     "--log_dir", "/data/hyogunlee/repos/VideoMAE/train_sh/debug",
                     "--output_dir", "/data/hyogunlee/repos/VideoMAE/train_sh/debug",
-                    "--batch_size", "4",
+                    "--batch_size", "2",
                     "--num_sample", "1",
                     "--epochs", "3",
                     "--save_ckpt_freq", "1",

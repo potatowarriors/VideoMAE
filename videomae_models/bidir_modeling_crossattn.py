@@ -181,8 +181,8 @@ class CrossAttentionS2T(nn.Module):
         head_dim = dim // self.num_head
         self.scale = head_dim ** -0.5
         all_head_dim = head_dim * self.num_head
-        self.clip_time_pos = nn.Parameter(self.scale * torch.randn((8, dim)))
-        self.vmae_time_pos = nn.Parameter(self.scale * torch.randn((8, dim)))
+        self.clip_time_pos = nn.Parameter(self.scale * torch.randn((196*8, dim)))
+        self.vmae_time_pos = nn.Parameter(self.scale * torch.randn((196*8, dim)))
         
         #여기에 cross attn t2s module이 들어가야 한다.
         self.s2t_q = nn.Linear(dim, all_head_dim, bias=False)
@@ -197,9 +197,8 @@ class CrossAttentionS2T(nn.Module):
     def s2t_cross_attn(self, s_x, t_x): # s_x=[n (b t) d], t_x=[b n d]
         B, _, _ = t_x.shape
         s_x_pat = s_x[1:, :, :]
-        s_x_pat = rearrange(s_x_pat, 'n (b t) d -> (b n) t d', t=8) # batch -> token
+        s_x_pat = rearrange(s_x_pat, 'n (b t) d -> b (t n) d', t=8) # batch -> token
         s_x_pat = s_x_pat + self.clip_time_pos
-        t_x = rearrange(t_x, 'b (t n) d -> (b n) t d', t=8)
         t_x = t_x + self.vmae_time_pos
         s2t_q_bias = self.s2t_q_bias
         s2t_kv_bias = self.s2t_kv_bias
@@ -218,7 +217,6 @@ class CrossAttentionS2T(nn.Module):
         t_x = (s2t_attn @ s2t_v)
         t_x = rearrange(t_x, 'b h t d -> b t (h d)')
         t_x = self.t2s_proj(t_x)
-        t_x = rearrange(t_x, '(b n) t d -> b (t n) d', b=B)
         return t_x
 
     def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
@@ -249,7 +247,7 @@ class CrossAttentionT2S(nn.Module):
     def t2s_cross_attn(self, s_x, t_x): # s_x=[n (b t) d], t_x=[b n d]
         B, _, _ = t_x.shape
         s_x_cls, s_x_pat = s_x[0, :, :], s_x[1:, :, :]
-        s_x_pat = rearrange(s_x_pat, 'n (b t) d -> b (t n) d', b=B) # batch -> token
+        s_x_pat = rearrange(s_x_pat, 'n (b t) d -> b (t n) d', t=8) # batch -> token
         s_x_pat = s_x_pat + self.clip_time_pos
         t_x = t_x + self.vmae_time_pos
         t2s_q_bias = self.t2s_q_bias
