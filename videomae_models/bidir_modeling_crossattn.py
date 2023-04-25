@@ -182,6 +182,7 @@ class CrossAttentionS2T(nn.Module):
         self.scale = head_dim ** -0.5
         all_head_dim = head_dim * self.num_head
         self.clip_space_time_pos = nn.Parameter(self.scale * torch.randn((197 * 8, dim)))
+        self.vmae_space_time_pos = nn.Parameter(self.scale * torch.randn((196 * 8, dim)))
         
         #여기에 cross attn t2s module이 들어가야 한다.
         self.s2t_q = nn.Linear(dim, all_head_dim, bias=False)
@@ -197,6 +198,7 @@ class CrossAttentionS2T(nn.Module):
         B, _, _ = t_x.shape
         s_x = rearrange(s_x, 'n (b t) d -> b (t n) d', b=B) # batch -> token
         s_x = s_x + self.clip_space_time_pos ## sapce time position encoding
+        t_x = t_x + self.vmae_space_time_pos
         s2t_q_bias = self.s2t_q_bias
         s2t_kv_bias = self.s2t_kv_bias
         
@@ -301,14 +303,18 @@ class Block(nn.Module):
         #########################################################################################
         
         ###################################### Cross attention ####################################
-        self.cross_s_down = nn.Linear(dim, dim//2)
-        self.cross_t_down = nn.Linear(dim, dim//2)
+        self.cross_s_down_1 = nn.Linear(dim, dim//2)
+        self.cross_s_donw_2 = nn.Linear(dim//2, dim//2)
+        self.cross_t_down_1 = nn.Linear(dim, dim//2)
+        self.cross_t_donw_2 = nn.Linear(dim//2, dim//2)
         self.ln_s_cross = norm_layer(dim//2)
         self.ln_t_cross = norm_layer(dim//2)
         self.t2s_cross = CrossAttentionT2S(dim//2, n_head=num_heads)
         self.s2t_cross = CrossAttentionS2T(dim//2, n_head=num_heads)
-        self.cross_s_up = nn.Linear(dim//2, dim)
-        self.cross_t_up = nn.Linear(dim//2, dim)
+        self.cross_s_up_1 = nn.Linear(dim//2, dim//2)
+        self.cross_t_up_1 = nn.Linear(dim//2, dim//2)
+        self.cross_s_up_2 = nn.Linear(dim//2, dim)
+        self.cross_t_up_2 = nn.Linear(dim//2, dim)
         ###########################################################################################
         
         ###################################### FFN code #########################################
@@ -350,10 +356,10 @@ class Block(nn.Module):
         ########################################################################
         
         ############################ Cross Forward #############################
-        n_s_x = self.ln_s_cross(self.cross_s_down(s_x))
-        n_t_x = self.ln_t_cross(self.cross_t_down(t_x))
-        c_s_x = self.cross_s_up(self.act(self.t2s_cross(n_s_x, n_t_x)))
-        c_t_x = self.cross_t_up(self.act(self.s2t_cross(n_s_x, n_t_x)))
+        n_s_x = self.ln_s_cross(self.cross_s_donw_2(self.act(self.cross_s_down_1(s_x))))
+        n_t_x = self.ln_t_cross(self.cross_t_donw_2(self.act(self.cross_t_down_1(t_x))))
+        c_s_x = self.cross_s_up_2(self.act(self.cross_s_up_1(self.act(self.t2s_cross(n_s_x, n_t_x)))))
+        c_t_x = self.cross_t_up_2(self.act(self.cross_t_up_1(self.act(self.s2t_cross(n_s_x, n_t_x)))))
         s_x = s_x + self.drop_path(c_s_x)
         t_x = t_x + self.drop_path(c_t_x)
         #########################################################################
