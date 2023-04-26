@@ -402,6 +402,8 @@ class STCrossTransformer(nn.Module):
         self.clip_conv1 = nn.Conv2d(in_channels=3, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size, bias=False)
         self.clip_class_embedding = nn.Parameter(scale * torch.randn(embed_dim))
         self.clip_positional_embedding = nn.Parameter(scale * torch.randn((img_size // patch_size) ** 2 + 1, embed_dim))
+        self.clip_time_pos = nn.Parameter(scale * torch.randn((8, embed_dim)))
+        self.vmae_time_pos = nn.Parameter(scale * torch.randn((8, embed_dim)))
         self.clip_ln_pre = LayerNorm(embed_dim)
 
         if use_learnable_pos_emb:
@@ -501,6 +503,9 @@ class STCrossTransformer(nn.Module):
         s_x = s_x.permute(0, 2, 1) # shape[batch, patchnum, embeddim]
         s_x = torch.cat([self.clip_class_embedding.to(s_x.dtype) + torch.zeros(s_x.shape[0], 1, s_x.shape[-1], dtype=s_x.dtype, device=s_x.device), s_x], dim=1)
         s_x = s_x + self.clip_positional_embedding.to(s_x.dtype)
+        s_x = rearrange(s_x, '(b t) n d -> (b n) t d', t=8)
+        s_x = s_x + self.clip_time_pos
+        s_x = rearrange(s_x, '(b n) t d -> (b t) n d', b=B)
         s_x = self.clip_ln_pre(s_x)
         #####################################################################
         
@@ -510,6 +515,9 @@ class STCrossTransformer(nn.Module):
         if self.pos_embed is not None:
             t_x = t_x + self.pos_embed.expand(B, -1, -1).type_as(t_x).to(t_x.device).clone().detach()
         t_x = self.pos_drop(t_x)
+        t_x = rearrange(t_x, 'b (t n) d -> (b n) t d', t=8)
+        t_x = t_x + self.vmae_time_pos
+        t_x = rearrange(t_x, '(b n) t d -> b (t n) d', b=B)
         #####################################################################
         
         s_x = s_x.permute(1,0,2)
