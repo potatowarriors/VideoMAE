@@ -288,6 +288,7 @@ class Block(nn.Module):
         ############################ AIM MHSA ###########################
         self.clip_ln_1 = LayerNorm(dim)
         self.clip_attn = nn.MultiheadAttention(dim, num_heads)
+        self.S_Adapter = Adapter(dim)
         ##################################################################
         
         ############################ VMAE MHSA ###########################
@@ -295,6 +296,7 @@ class Block(nn.Module):
         self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
             attn_drop=attn_drop, proj_drop=drop, attn_head_dim=attn_head_dim)
+        self.T_Adapter = Adapter(dim)
         ##################################################################
         #########################################################################################
         
@@ -342,9 +344,9 @@ class Block(nn.Module):
         
         ############################ MHSA Forward #############################
         # AIM Space MHSA
-        temp_s_x = self.attention(self.clip_ln_1(s_x)) # original space multi head self attention
+        s_x = s_x + self.S_Adapter(self.attention(self.clip_ln_1(s_x))) # original space multi head self attention
         # VMAE Time MHSA
-        temp_t_x = self.attn(self.norm1(t_x))
+        t_x = t_x + self.T_Adapter(self.attn(self.norm1(t_x)))
         ########################################################################
         
         ############################ Cross Forward #############################
@@ -352,8 +354,8 @@ class Block(nn.Module):
         n_t_x = self.ln_t_cross(self.cross_t_down(t_x))
         c_s_x = self.cross_s_up(self.act(self.t2s_cross(n_s_x, n_t_x)))
         c_t_x = self.cross_t_up(self.act(self.s2t_cross(n_s_x, n_t_x)))
-        s_x = s_x + self.drop_path(temp_s_x) + self.drop_path(c_s_x)
-        t_x = t_x + self.drop_path(temp_t_x) + self.drop_path(c_t_x)
+        s_x = s_x + self.drop_path(c_s_x)
+        t_x = t_x + self.drop_path(c_t_x)
         #########################################################################
         
         ############################ FFN Forward ##################################
