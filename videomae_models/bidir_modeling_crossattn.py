@@ -314,8 +314,8 @@ class Block(nn.Module):
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
         #######################################################################
         #########################################################################################
-        self.add_t2s_norm = norm_layer(dim)
-        self.add_s2t_norm = norm_layer(dim)
+        self.fusion_s = nn.Linear(dim, dim)
+        self.fusion_t = nn.Linear(dim, dim)
         
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -342,13 +342,17 @@ class Block(nn.Module):
         ############################################################################
         
         ###########################lateral connect T2S##############################
-        cls_tokens, s_x = s_x[0, :, :].unsqueeze(0), s_x[1:, :, :]
+        temp_s_x = self.fusion_s(s_x)
+        temp_t_x = self.fusion_t(t_x)
         
-        temp_s_x = rearrange(s_x, 'n (b t) d -> b (t n) d', t=8).clone()
-        temp_t_x = rearrange(t_x, 'b (t n) d -> n (b t) d', t=8).clone()
-        s_x = s_x + self.add_t2s_norm(temp_t_x)
-        t_x = t_x + self.add_s2t_norm(temp_s_x)
-        s_x = torch.cat((cls_tokens, s_x), dim=0)
+        temp_s_x = temp_s_x[1:, :, :]
+        temp_s_x = rearrange(temp_s_x, 'n (b t) d -> b (t n) d', t=8)
+        t_x = t_x + temp_s_x
+        
+        temp_t_x = rearrange(temp_t_x, 'b (t n) d -> n (b t) d', t=8)
+        cls_tokens, patch_tokens = s_x[0, :, :].unsqueeze(0), s_x[1:, :, :]
+        patch_tokens = patch_tokens + temp_t_x
+        s_x = torch.cat((cls_tokens, patch_tokens), dim=0)
 
         
         
