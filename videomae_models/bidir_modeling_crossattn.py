@@ -181,7 +181,8 @@ class CrossAttentionS2T(nn.Module):
         head_dim = dim // self.num_head
         self.scale = head_dim ** -0.5
         all_head_dim = head_dim * self.num_head
-        self.clip_space_time_pos = nn.Parameter(self.scale * torch.randn((197 * 8, dim)))
+        self.clip_space_pos = nn.Parameter(self.scale * torch.randn((196, dim)))
+        self.vmae_space_pos = nn.Parameter(self.scale * torch.randn((196, dim)))
         
         #여기에 cross attn t2s module이 들어가야 한다.
         self.s2t_q = nn.Linear(dim, all_head_dim, bias=False)
@@ -195,14 +196,17 @@ class CrossAttentionS2T(nn.Module):
     
     def s2t_cross_attn(self, s_x, t_x): # s_x=[n (b t) d], t_x=[b n d]
         B, _, _ = t_x.shape
-        s_x = rearrange(s_x, 'n (b t) d -> b (t n) d', b=B) # batch -> token
-        s_x = s_x + self.clip_space_time_pos ## sapce time position encoding
+        s_x_pat = s_x[1:, :, :]
+        s_x_pat = rearrange(s_x_pat, 'n b d -> b n d') # batch -> token
+        s_x_pat = s_x_pat + self.clip_space_pos
+        t_x = rearrange(t_x, 'b (t n) d -> (b t) n d', t=8)
+        t_x = t_x + self.vmae_space_pos
         s2t_q_bias = self.s2t_q_bias
         s2t_kv_bias = self.s2t_kv_bias
         
         s2t_q = F.linear(input=t_x, weight=self.s2t_q.weight, bias=s2t_q_bias)
         s2t_q = rearrange(s2t_q, 'b n (h d) -> b h n d', h=self.num_head)
-        s2t_kv = F.linear(input=s_x, weight=self.s2t_kv.weight, bias=s2t_kv_bias)
+        s2t_kv = F.linear(input=s_x_pat, weight=self.s2t_kv.weight, bias=s2t_kv_bias)
         s2t_kv = rearrange(s2t_kv, 'b n (e h d) -> e b h n d',e=2, h=self.num_head)
         s2t_k, s2t_v = s2t_kv[0], s2t_kv[1]
         
@@ -212,8 +216,9 @@ class CrossAttentionS2T(nn.Module):
         s2t_attn = s2t_attn.softmax(dim=-1)
         
         t_x = (s2t_attn @ s2t_v)
-        t_x = rearrange(t_x, 'b h n d -> b n (h d)')
+        t_x = rearrange(t_x, 'b h t d -> b t (h d)')
         t_x = self.t2s_proj(t_x)
+        t_x = rearrange(t_x, '(b t) n d -> b (t n) d', b=B)
         return t_x
 
     def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
@@ -436,8 +441,8 @@ class STCrossTransformer(nn.Module):
             self.head_noun = nn.Linear(embed_dim, 300)
             self.head_noun_dropout = nn.Dropout(head_drop_rate)
         else:
-            self.head_verb_Adapter = Adapter(embed_dim, skip_connect=False)
-            self.head_noun_Adapter = Adapter(embed_dim, skip_connect=False)
+            self.noun_last_Adapter = Adapter(embed_dim, skip_connect=False)
+            self.verb_last_Adapter = Adapter(embed_dim, skip_connect=False)
             self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
         if use_learnable_pos_emb:
@@ -452,6 +457,8 @@ class STCrossTransformer(nn.Module):
             self.head_noun.weight.data.mul_(init_scale)
             self.head_noun.bias.data.mul_(init_scale)
         else:
+            nn.init.constant_(self.noun_last_Adapter.D_fc2.weight, 0)
+            nn.init.constant_(self.verb_last_Adapter.D_fc2.weight, 0)
             self.head.weight.data.mul_(init_scale)
             self.head.bias.data.mul_(init_scale)
 
@@ -484,7 +491,7 @@ class STCrossTransformer(nn.Module):
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        return {'clip_time_pos','clip_space_time_pos','vmae_time_pos','pos_embed'}
+        return {'clip_time_pos','clip_space_pos','vmae_space_pos','vmae_time_pos','pos_embed'}
 
     def get_classifier(self):
         return self.head
@@ -539,7 +546,7 @@ class STCrossTransformer(nn.Module):
             return s_x, t_x
         else:
             s_x, t_x = self.forward_features(x)
-            x = self.head_noun_Adapter(s_x) + self.head_verb_Adapter(t_x)
+            x = self.noun_last_Adapter(s_x) + self.verb_last_Adapter(t_x)
             x = self.head(x)
             return x
 
