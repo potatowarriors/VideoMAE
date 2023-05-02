@@ -46,6 +46,8 @@ def get_args():
                         help='Attention dropout rate (default: 0.)')
     parser.add_argument('--drop_path', type=float, default=0.1, metavar='PCT',
                         help='Drop path rate (default: 0.1)')
+    parser.add_argument('--head_drop_rate', type=float, default=0.0, metavar='PCT',
+                        help='Dropout rate for head (default: 0.)')
 
     parser.add_argument('--disable_eval_during_finetuning', action='store_true', default=False)
     parser.add_argument('--model_ema', action='store_true', default=False)
@@ -325,6 +327,7 @@ def main(args, ds_init):
           drop_rate=args.drop,
           drop_path_rate=args.drop_path,
           attn_drop_rate=args.attn_drop_rate,
+          head_drop_rate=args.head_drop_rate,
           drop_block_rate=None,
           use_mean_pooling=args.use_mean_pooling,
           init_scale=args.init_scale,

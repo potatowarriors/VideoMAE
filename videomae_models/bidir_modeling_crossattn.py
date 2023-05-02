@@ -444,6 +444,7 @@ class STCrossTransformer(nn.Module):
             self.noun_last_Adapter = Adapter(embed_dim, skip_connect=False)
             self.verb_last_Adapter = Adapter(embed_dim, skip_connect=False)
             self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+            self.head_dropout = nn.Dropout(head_drop_rate)
 
         if use_learnable_pos_emb:
             trunc_normal_(self.pos_embed, std=.02)
@@ -547,6 +548,7 @@ class STCrossTransformer(nn.Module):
         else:
             s_x, t_x = self.forward_features(x)
             x = self.noun_last_Adapter(s_x) + self.verb_last_Adapter(t_x)
+            x = self.head_dropout(x)
             x = self.head(x)
             return x
 
