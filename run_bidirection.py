@@ -18,11 +18,10 @@ from timm.utils import ModelEma
 from util_tools.optim_factory import create_optimizer, get_parameter_groups, LayerDecayValueAssigner
 
 from dataset.datasets import build_dataset
-from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, unfreeze_block
-from util_tools.utils import cross_multiple_samples_collate, notice_message, laod_eval_weights
+from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, load_origvit_bidir_weights, load_maevit_bidir_weights, unfreeze_block
+from util_tools.utils import multiple_samples_collate, notice_message, laod_eval_weights
 import util_tools.utils as utils
-import clip_models.clip as clip
-import videomae_models.bidir_modeling_crossattn
+import videomae_models.bidir_modeling_crossattn, videomae_models.bidir_vit_modeling_crossattn
 
 
 def get_args():
@@ -55,8 +54,6 @@ def get_args():
     parser.add_argument('--model_ema_force_cpu', action='store_true', default=False, help='')
 
     # Optimizer parameters
-    parser.add_argument('--focal_loss_gamma', default=None, type=float,
-                        help='focal loss gamma')
     parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
                         help='Optimizer (default: "adamw"')
     parser.add_argument('--opt_eps', default=1e-8, type=float, metavar='EPSILON',
@@ -124,7 +121,7 @@ def get_args():
                         help='cutmix min/max ratio, overrides alpha and enables cutmix if set (default: None)')
     parser.add_argument('--mixup_prob', type=float, default=1.0,
                         help='Probability of performing mixup or cutmix when either/both is enabled')
-    parser.add_argument('--mixup_switch_prob', type=float, default=0.5, ## 이부분을 조금 더 낮은 비율로 낮춰봐야겠다.
+    parser.add_argument('--mixup_switch_prob', type=float, default=0.5,
                         help='Probability of switching to cutmix when both mixup and cutmix enabled')
     parser.add_argument('--mixup_mode', type=str, default='batch',
                         help='How to apply mixup/cutmix params. Per "batch", "pair", or "elem"')
@@ -132,6 +129,8 @@ def get_args():
     # Finetuning params
     parser.add_argument('--vmae_finetune', default='', help='finetune from checkpoint')
     parser.add_argument('--clip_finetune',default='', help='finetune from clip checkpoint')
+    parser.add_argument('--vit_finetune', default=None, help='finetune from original vit')
+    parser.add_argument('--maevit_finetune', default=None, help='finetune from mae vit')
     parser.add_argument('--fine_tune', default=None, help='finetune from bidir model')
     parser.add_argument('--model_key', default='model|module', type=str)
     parser.add_argument('--model_prefix', default='', type=str)
@@ -268,7 +267,7 @@ def main(args, ds_init):
         log_writer = None
 
     if args.num_sample > 1:
-        collate_func = partial(cross_multiple_samples_collate, fold=False)
+        collate_func = partial(multiple_samples_collate, fold=False)
     else:
         collate_func = None
 
@@ -335,11 +334,15 @@ def main(args, ds_init):
     
     if args.fine_tune is not None:
         laod_eval_weights(model, args.fine_tune, args)
+    elif args.vit_finetune is not None:
+        load_origvit_bidir_weights(model, args.vit_finetune, args)
+    elif args.maevit_finetune is not None:
+        load_maevit_bidir_weights(model, args.maevit_finetune, args)
     else:
         load_bidir_weights(model, args)
     
     ###### VMAE 검증을 위해 freeze는 잠시 꺼둔다 #############
-    model, unfreeze_list = unfreeze_block(model, ['cross', 'clip_space_time_pos', 'clip_time_pos', 'vmae_space_time_pos', 'vmae_time_pos', 'Adapter', 'ln_post', 'vmae_fc_norm','last_proj','head'])
+    model, unfreeze_list = unfreeze_block(model, ['cross', 'clip_space_time_pos', 'clip_time_pos', 'vmae_time_pos', 'Adapter', 'ln_post', 'vmae_fc_norm','last_proj','head'])
     print('unfreeze list :', unfreeze_list)
     
     model.to(device)

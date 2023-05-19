@@ -18,10 +18,10 @@ from timm.utils import ModelEma
 from util_tools.optim_factory import create_optimizer, get_parameter_groups, LayerDecayValueAssigner
 
 from dataset.datasets import build_dataset
-from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, unfreeze_block
+from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, load_origvit_bidir_weights, load_maevit_bidir_weights, unfreeze_block
 from util_tools.utils import multiple_samples_collate, notice_message, laod_eval_weights
 import util_tools.utils as utils
-import videomae_models.bidir_modeling_crossattn
+import videomae_models.bidir_modeling_crossattn, videomae_models.bidir_vit_modeling_crossattn
 
 
 def get_args():
@@ -129,6 +129,8 @@ def get_args():
     # Finetuning params
     parser.add_argument('--vmae_finetune', default='', help='finetune from checkpoint')
     parser.add_argument('--clip_finetune',default='', help='finetune from clip checkpoint')
+    parser.add_argument('--vit_finetune', default=None, help='finetune from original vit')
+    parser.add_argument('--maevit_finetune', default=None, help='finetune from mae vit')
     parser.add_argument('--fine_tune', default=None, help='finetune from bidir model')
     parser.add_argument('--model_key', default='model|module', type=str)
     parser.add_argument('--model_prefix', default='', type=str)
@@ -332,6 +334,10 @@ def main(args, ds_init):
     
     if args.fine_tune is not None:
         laod_eval_weights(model, args.fine_tune, args)
+    elif args.vit_finetune is not None:
+        load_origvit_bidir_weights(model, args.vit_finetune, args)
+    elif args.maevit_finetune is not None:
+        load_maevit_bidir_weights(model, args.maevit_finetune, args)
     else:
         load_bidir_weights(model, args)
     

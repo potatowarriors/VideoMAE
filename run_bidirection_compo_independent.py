@@ -18,12 +18,10 @@ from timm.utils import ModelEma
 from util_tools.optim_factory import create_optimizer, get_parameter_groups, LayerDecayValueAssigner
 
 from dataset.datasets import build_dataset
-from engine_for_onemodel import train_one_epoch, validation_one_epoch, final_test, merge
-from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, laod_vmae_weights, load_clip_weights, freeze_block
-from util_tools.utils import multiple_samples_collate, notice_message
+from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, load_origvit_bidir_weights, load_maevit_bidir_weights, unfreeze_block
+from util_tools.utils import multiple_samples_collate, notice_message, laod_eval_weights
 import util_tools.utils as utils
-import clip_models.clip as clip
-import videomae_models.t2s_fintune
+import videomae_models.bidir_modeling_crossattn, videomae_models.bidir_vit_modeling_crossattn, videomae_models.bidir_modeling_independent
 
 
 def get_args():
@@ -36,9 +34,7 @@ def get_args():
     # Model parameters
     parser.add_argument('--vmae_model', default='vit_base_patch16_224', type=str, metavar='MODEL',
                         help='Name of model to train')
-    parser.add_argument('--clip_model', default='clip', choices=['clip', 't2s','conv'], type=str, help='pick clip version')
-    parser.add_argument('--clip_frame', default=None, choices=['center', 'all'], type=str, help='pick clip frame number')
-    parser.add_argument('--cls_split', default=False, type=bool, help='using cls token split')
+    parser.add_argument('--clip_frame', default=None, type=str)
     parser.add_argument('--tubelet_size', type=int, default= 2)
     parser.add_argument('--input_size', default=224, type=int,
                         help='videos input size')
@@ -49,6 +45,8 @@ def get_args():
                         help='Attention dropout rate (default: 0.)')
     parser.add_argument('--drop_path', type=float, default=0.1, metavar='PCT',
                         help='Drop path rate (default: 0.1)')
+    parser.add_argument('--head_drop_rate', type=float, default=0.0, metavar='PCT',
+                        help='Dropout rate for head (default: 0.)')
 
     parser.add_argument('--disable_eval_during_finetuning', action='store_true', default=False)
     parser.add_argument('--model_ema', action='store_true', default=False)
@@ -131,6 +129,9 @@ def get_args():
     # Finetuning params
     parser.add_argument('--vmae_finetune', default='', help='finetune from checkpoint')
     parser.add_argument('--clip_finetune',default='', help='finetune from clip checkpoint')
+    parser.add_argument('--vit_finetune', default=None, help='finetune from original vit')
+    parser.add_argument('--maevit_finetune', default=None, help='finetune from mae vit')
+    parser.add_argument('--fine_tune', default=None, help='finetune from bidir model')
     parser.add_argument('--model_key', default='model|module', type=str)
     parser.add_argument('--model_prefix', default='', type=str)
     parser.add_argument('--init_scale', default=0.001, type=float)
@@ -194,11 +195,8 @@ def get_args():
     # new settings
     parser.add_argument('--freeze_layers', default=None, nargs='+', type=str)
     parser.add_argument('--slack_api', type=str,default=None)
+    parser.add_argument('--composition', action='store_true')
     
-    parser.add_argument('--reduce_position', default=None, nargs='+', type=int)
-    parser.add_argument('--kernel_size', default=None, nargs='+', type=int)
-    parser.add_argument('--pad_size', default=None, nargs='+', type=int)
-    parser.add_argument('--stride', default=None, nargs='+', type=int)
 
     known_args, _ = parser.parse_known_args()
 
@@ -311,7 +309,7 @@ def main(args, ds_init):
         mixup_fn = Mixup(
             mixup_alpha=args.mixup, cutmix_alpha=args.cutmix, cutmix_minmax=args.cutmix_minmax,
             prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
-            label_smoothing=args.smoothing, num_classes=args.nb_classes)
+            label_smoothing=args.smoothing, num_classes=args.nb_classes, composition=args.composition)
 
     patch_size = 14
     print("Patch size = %s" % str(patch_size))
@@ -319,10 +317,32 @@ def main(args, ds_init):
     args.patch_size = patch_size
     
     
-    model = clip.load(args.clip_finetune, args, device='cuda')
-    if args.freeze_layers is not None:
-        model, freeze_list = freeze_block(model, args.freeze_layers)
-        print('freeze list:', freeze_list)
+    model = create_model(
+          args.vmae_model,
+          pretrained=False,
+          num_classes=args.nb_classes,
+          all_frames=args.num_frames * args.num_segments,
+          tubelet_size=args.tubelet_size,
+          drop_rate=args.drop,
+          drop_path_rate=args.drop_path,
+          attn_drop_rate=args.attn_drop_rate,
+          head_drop_rate=args.head_drop_rate,
+          drop_block_rate=None,
+          use_mean_pooling=args.use_mean_pooling,
+          init_scale=args.init_scale,
+      )
+    
+    if args.fine_tune is not None:
+        laod_eval_weights(model, args.fine_tune, args)
+    elif args.vit_finetune is not None:
+        load_origvit_bidir_weights(model, args.vit_finetune, args)
+    elif args.maevit_finetune is not None:
+        load_maevit_bidir_weights(model, args.maevit_finetune, args)
+    else:
+        load_bidir_weights(model, args)
+    
+    model.to(device)
+    
     
     model_ema = None
     if args.model_ema:
@@ -410,17 +430,23 @@ def main(args, ds_init):
         args=args, model=model, model_without_ddp=model_without_ddp,
         optimizer=optimizer, loss_scaler=loss_scaler, model_ema=model_ema)
     
+    if args.composition:
+        from engine_for_compomodel import train_one_epoch, validation_one_epoch, final_test, merge
+    else:
+        from engine_for_onemodel import train_one_epoch, validation_one_epoch, final_test, merge
 
     if args.eval:
         preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
-        test_stats = final_test(data_loader_test, model, device, preds_file)
+        test_stats = final_test(args, data_loader_test, model, device, preds_file)
         torch.distributed.barrier()
         if global_rank == 0:
             print("Start merging results...")
-            final_top1 ,final_top5 = merge(args.output_dir, num_tasks)
-            print(f"Accuracy of the network on the {len(dataset_test)} test videos: Top-1: {final_top1:.2f}%, Top-5: {final_top5:.2f}%")
-            log_stats = {'Final top-1': final_top1, 
-                         'Final Top-5': final_top5}
+            final_top1_action ,final_top5_action, final_top1_noun, final_top5_noun, final_top1_verb, final_top5_verb = merge(args.output_dir, num_tasks)
+            print(f"Accuracy of the network on the {len(dataset_test)} test videos: Top-1: {final_top1_action:.2f}%, Top-5: {final_top5_action:.2f}%")
+            log_stats = {'Final Top-1 Action': final_top1_action,
+                        'Final Top-5 Action': final_top5_action,
+                        'Final Top-1 Noun': final_top1_noun,
+                        'Final Top-1 Verb': final_top1_verb}
             if args.output_dir and utils.is_main_process():
                 with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                     f.write(json.dumps(log_stats) + "\n")
@@ -451,9 +477,10 @@ def main(args, ds_init):
                     loss_scaler=loss_scaler, epoch=epoch, model_ema=model_ema)
         if data_loader_val is not None:
             test_stats = validation_one_epoch(args, data_loader_val, model, device)
-            print(f"Accuracy of the network on the {len(dataset_val)} val videos: {test_stats['acc1']:.1f}%")
-            if max_accuracy < test_stats["acc1"]:
-                max_accuracy = test_stats["acc1"]
+            torch.cuda.empty_cache()
+            print(f"Accuracy of the network on the {len(dataset_val)} val videos: {test_stats['acc1_action']:.1f}%")
+            if max_accuracy < test_stats["acc1_action"]:
+                max_accuracy = test_stats["acc1_action"]
                 if args.output_dir and args.save_ckpt:
                     utils.save_model(
                         args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
@@ -461,9 +488,7 @@ def main(args, ds_init):
 
             print(f'Max accuracy: {max_accuracy:.2f}%')
             if log_writer is not None:
-                log_writer.update(val_acc1=test_stats['acc1'], head="perf", step=epoch)
-                log_writer.update(val_acc5=test_stats['acc5'], head="perf", step=epoch)
-                log_writer.update(val_loss=test_stats['loss'], head="perf", step=epoch)
+                log_writer.update(val_acc1=test_stats['acc1_action'], head="perf", step=epoch)
 
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                          **{f'val_{k}': v for k, v in test_stats.items()},
@@ -484,10 +509,14 @@ def main(args, ds_init):
     torch.distributed.barrier()
     if global_rank == 0:
         print("Start merging results...")
-        final_top1 ,final_top5 = merge(args.output_dir, num_tasks)
-        print(f"Accuracy of the network on the {len(dataset_test)} test videos: Top-1: {final_top1:.2f}%, Top-5: {final_top5:.2f}%")
-        log_stats = {'Final top-1': final_top1,
-                    'Final Top-5': final_top5}
+        final_top1_action ,final_top5_action, final_top1_noun, final_top5_noun, final_top1_verb, final_top5_verb = merge(args.output_dir, num_tasks)
+        print(f"Accuracy of the network on the {len(dataset_test)} test videos: Top-1 Action: {final_top1_action:.2f}%, Top-5 Action: {final_top5_action:.2f}%")
+        log_stats = {'Final top-1 Action': final_top1_action,
+                    'Final Top-5 Action': final_top5_action,
+                    'Final Top-1 Noun': final_top1_noun,
+                    'Final Top-1 Verb': final_top1_verb,
+                    'Final Top-5 Noun': final_top5_noun,
+                    'Final Top-5 Verb': final_top5_verb}
         if args.output_dir and utils.is_main_process():
             with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                 f.write(json.dumps(log_stats) + "\n")
@@ -509,7 +538,7 @@ def main(args, ds_init):
             'text' : cluster,
             }
             attach_list=[attach_dict] 
-            contents=f"Training time is {job_time}\n Top 1 Accuracy is {final_top1}"
+            contents=f"Training time is {job_time}\n Top 1 Accuracy is {final_top1_action}"
             notice_message(Token, "#notice-job", contents, attach_list)
     
 
