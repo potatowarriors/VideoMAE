@@ -609,14 +609,6 @@ def compo_bidir_orig_vit_base_patch16_224(pretrained=False, **kwargs):
     #model.default_cfg = _cfg()
     return model
 
-@register_model
-def compo_bidir_mae_vit_base_patch16_224(pretrained=False, **kwargs):
-    model = STCrossTransformer(
-        patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6), composition=True, **kwargs)
-    #model.default_cfg = _cfg()
-    return model
-
 
 
 

@@ -18,7 +18,7 @@ from timm.utils import ModelEma
 from util_tools.optim_factory import create_optimizer, get_parameter_groups, LayerDecayValueAssigner
 
 from dataset.datasets import build_dataset
-from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, load_origvit_bidir_weights, load_maevit_bidir_weights, unfreeze_block
+from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, load_origvit_bidir_weights, unfreeze_block
 from util_tools.utils import multiple_samples_collate, notice_message, laod_eval_weights
 import util_tools.utils as utils
 import videomae_models.bidir_modeling_crossattn, videomae_models.bidir_vit_modeling_crossattn, videomae_models.bidir_modeling_independent
@@ -336,8 +336,6 @@ def main(args, ds_init):
         laod_eval_weights(model, args.fine_tune, args)
     elif args.vit_finetune is not None:
         load_origvit_bidir_weights(model, args.vit_finetune, args)
-    elif args.maevit_finetune is not None:
-        load_maevit_bidir_weights(model, args.maevit_finetune, args)
     else:
         load_bidir_weights(model, args)
     
