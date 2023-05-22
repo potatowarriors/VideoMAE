@@ -521,8 +521,9 @@ class STCrossTransformer(nn.Module):
         num_patches = self.patch_embed.num_patches
         
         scale = embed_dim ** -0.5
-        self.clip_conv1 = nn.Conv2d(in_channels=3, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size, bias=False)
-        self.clip_class_embedding = nn.Parameter(scale * torch.randn(embed_dim))
+        self.clip_patch_embed = PatchEmbed(
+            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
+        self.clip_cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.clip_positional_embedding = nn.Parameter(scale * torch.randn((img_size // patch_size) ** 2 + 1, embed_dim))
         self.clip_ln_pre = LayerNorm(embed_dim)
 
@@ -620,12 +621,12 @@ class STCrossTransformer(nn.Module):
         ######################## AIM spatial path #########################
         s_t = s_x.shape[2]
         s_x = rearrange(s_x, 'b c t h w -> (b t) c h w')
-        s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
-        s_x = s_x.reshape(s_x.shape[0], s_x.shape[1], -1) # [*, embeddim, grid**2]
-        s_x = s_x.permute(0, 2, 1) # shape[batch, patchnum, embeddim]
-        s_x = torch.cat([self.clip_class_embedding.to(s_x.dtype) + torch.zeros(s_x.shape[0], 1, s_x.shape[-1], dtype=s_x.dtype, device=s_x.device), s_x], dim=1)
-        s_x = s_x + self.clip_positional_embedding.to(s_x.dtype)
-        s_x = self.clip_ln_pre(s_x)
+        s_x = self.patch_embed(s_x)
+        batch_size, seq_len, _ = s_x.size()
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        s_x = torch.cat((cls_tokens, s_x), dim=1)
+        s_x = s_x + self.pos_embed
+        
         #####################################################################
         
         ######################## VMAE spatial path #########################

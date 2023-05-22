@@ -8,6 +8,7 @@ from timm.models.layers import drop_path, to_2tuple, trunc_normal_
 from timm.models.registry import register_model
 from collections import OrderedDict
 from einops import rearrange
+from .rope import VisionRotaryEmbedding, VisionRotaryEmbeddingFast
 import random
 
 
@@ -67,6 +68,29 @@ class QuickGELU(nn.Module):
     def forward(self, x: torch.Tensor):
         return x * torch.sigmoid(1.702 * x)
 
+class EVA_PatchEmbed(nn.Module):
+    """ Image to Patch Embedding
+    """
+    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
+        super().__init__()
+        img_size = to_2tuple(img_size)
+        patch_size = to_2tuple(patch_size)
+        num_patches = (img_size[1] // patch_size[1]) * (img_size[0] // patch_size[0])
+        self.patch_shape = (img_size[0] // patch_size[0], img_size[1] // patch_size[1])
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.num_patches = num_patches
+
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+
+    def forward(self, x, **kwargs):
+        B, C, H, W = x.shape
+        # FIXME look at relaxing size constraints
+        assert H == self.img_size[0] and W == self.img_size[1], \
+            f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
+        x = self.proj(x).flatten(2).transpose(1, 2)
+        return x
+    
 class PatchEmbed(nn.Module):
     """ Image to Patch Embedding
     """
@@ -232,6 +256,40 @@ class Mlp(nn.Module):
         x = self.act(x)
         # x = self.drop(x)
         # commit this for the orignal BERT implement 
+        x = self.fc2(x)
+        x = self.drop(x)
+        return x
+    
+class EVA_Mlp(nn.Module):
+    def __init__(
+        self, 
+        in_features, 
+        hidden_features=None, 
+        out_features=None, 
+        act_layer=nn.GELU, 
+        norm_layer=nn.LayerNorm, 
+        drop=0.,
+        subln=False,
+
+        ):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Linear(in_features, hidden_features)
+        self.act = act_layer()
+
+        self.ffn_ln = norm_layer(hidden_features) if subln else nn.Identity()
+
+        self.fc2 = nn.Linear(hidden_features, out_features)
+        self.drop = nn.Dropout(drop)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.act(x)
+        # x = self.drop(x)
+        # commit this for the orignal BERT implement 
+        x = self.ffn_ln(x)
+
         x = self.fc2(x)
         x = self.drop(x)
         return x
@@ -471,8 +529,7 @@ class CrossAttentionS2T(nn.Module):
     
     def s2t_cross_attn(self, s_x, t_x): # s_x=[n (b t) d], t_x=[b n d]
         B, _, _ = t_x.shape
-        s_x_pat = s_x[1:, :, :]
-        s_x_pat = rearrange(s_x_pat, 'n b d -> b n d') # batch -> token
+        s_x_pat = s_x[:, 1:, :]
         s_x_pat = s_x_pat + self.clip_space_pos
         t_x = rearrange(t_x, 'b (t n) d -> (b t) n d', t=8)
         t_x = t_x + self.vmae_space_pos
@@ -523,8 +580,8 @@ class CrossAttentionT2S(nn.Module):
     
     def t2s_cross_attn(self, s_x, t_x): # s_x=[n (b t) d], t_x=[b n d]
         B, _, _ = t_x.shape
-        s_x_cls, s_x_pat = s_x[0, :, :], s_x[1:, :, :]
-        s_x_pat = rearrange(s_x_pat, 'n (b t) d -> (b n) t d', b=B) # batch -> token
+        s_x_cls, s_x_pat = s_x[:, 0, :], s_x[:, 1:, :]
+        s_x_pat = rearrange(s_x_pat, '(b t) n d -> (b n) t d', t=8) # batch -> token
         s_x_pat = s_x_pat + self.clip_time_pos
         t_x = rearrange(t_x, 'b (t n) d -> (b n) t d', t=8)
         t_x = t_x + self.vmae_time_pos
@@ -545,8 +602,8 @@ class CrossAttentionT2S(nn.Module):
         s_x_pat = (t2s_attn @ t2s_v)
         s_x_pat = rearrange(s_x_pat, 'b h n d -> b n (h d)')
         s_x_pat = self.t2s_proj(s_x_pat)
-        s_x_pat = rearrange(s_x_pat,'(b n) t d -> n (b t) d', b=B)
-        s_x = torch.cat([s_x_cls.unsqueeze(0), s_x_pat], dim=0)
+        s_x_pat = rearrange(s_x_pat,'(b n) t d -> (b t) n d', b=B)
+        s_x = torch.cat([s_x_cls.unsqueeze(1), s_x_pat], dim=1)
         return s_x
 
     def forward(self, s_x: torch.Tensor, t_x: torch.Tensor):
@@ -556,21 +613,23 @@ class CrossAttentionT2S(nn.Module):
 class Block(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., init_values=None, num_layer=0, act_layer=nn.GELU, norm_layer=nn.LayerNorm, attn_head_dim=None):
+                 drop_path=0., init_values=None, act_layer=nn.GELU, norm_layer=nn.LayerNorm,
+                 window_size=None, attn_head_dim=None, xattn=False, rope=None, postnorm=False,
+                 subln=False, naiveswiglu=False):
         super().__init__()
-        self.num_layer = num_layer
         self.num_heads = num_heads
         self.scale = 0.5
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.act = act_layer()
+        self.clip_rope = rope
         
         ###################################### MHSA code #####################################
         ############################ AIM MHSA ###########################
         self.clip_norm1 = norm_layer(dim)
-        self.clip_attn = Attention(
+        self.clip_attn = EVA_Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
-            attn_drop=attn_drop, proj_drop=drop, window_size=True, attn_head_dim=attn_head_dim,
-            xattn=False, rope=True, subln=True, norm_layer=norm_layer)
+            attn_drop=attn_drop, proj_drop=drop, window_size=window_size, attn_head_dim=attn_head_dim,
+            xattn=False, rope=self.clip_rope, subln=True, norm_layer=norm_layer)
         self.S_Adapter = Adapter(dim)
         ##################################################################
         
@@ -599,7 +658,7 @@ class Block(nn.Module):
         self.clip_norm2 = norm_layer(dim)
         self.clip_mlp =SwiGLU(
                 in_features=dim, 
-                hidden_features=mlp_hidden_dim, 
+                hidden_features=2048, 
                 subln=True,
                 norm_layer=norm_layer,
             )
@@ -627,9 +686,9 @@ class Block(nn.Module):
         num_frames = bt//B
         
         ############################ MHSA Forward #############################
-        # AIM Space MHSA
-        s_x = s_x + self.drop_path(self.clip_attn(self.norm1(s_x), rel_pos_bias=True, attn_mask=False))
-        s_x = s_x + self.S_Adapter(self.attention(self.clip_ln_1(s_x))) # original space multi head self attention
+        # CLIP Space MHSA
+        s_x = s_x + self.S_Adapter(self.clip_attn(self.clip_norm1(s_x), rel_pos_bias=None, attn_mask=None))
+        # s_x = s_x + self.S_Adapter(self.attention(self.clip_ln_1(s_x))) # original space multi head self attention
         # VMAE Time MHSA
         t_x = t_x + self.T_Adapter(self.attn(self.norm1(t_x)))
         ########################################################################
@@ -652,6 +711,42 @@ class Block(nn.Module):
         ############################################################################
         
         return s_x, t_x
+    
+class RelativePositionBias(nn.Module):
+
+    def __init__(self, window_size, num_heads):
+        super().__init__()
+        self.window_size = window_size
+        self.num_relative_distance = (2 * window_size[0] - 1) * (2 * window_size[1] - 1) + 3
+        self.relative_position_bias_table = nn.Parameter(
+            torch.zeros(self.num_relative_distance, num_heads))  # 2*Wh-1 * 2*Ww-1, nH
+        # cls to token & token 2 cls & cls to cls
+
+        # get pair-wise relative position index for each token inside the window
+        coords_h = torch.arange(window_size[0])
+        coords_w = torch.arange(window_size[1])
+        coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
+        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
+        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
+        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
+        relative_coords[:, :, 0] += window_size[0] - 1  # shift to start from 0
+        relative_coords[:, :, 1] += window_size[1] - 1
+        relative_coords[:, :, 0] *= 2 * window_size[1] - 1
+        relative_position_index = \
+            torch.zeros(size=(window_size[0] * window_size[1] + 1,) * 2, dtype=relative_coords.dtype)
+        relative_position_index[1:, 1:] = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
+        relative_position_index[0, 0:] = self.num_relative_distance - 3
+        relative_position_index[0:, 0] = self.num_relative_distance - 2
+        relative_position_index[0, 0] = self.num_relative_distance - 1
+
+        self.register_buffer("relative_position_index", relative_position_index)
+
+    def forward(self):
+        relative_position_bias = \
+            self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1] + 1,
+                self.window_size[0] * self.window_size[1] + 1, -1)  # Wh*Ww,Wh*Ww,nH
+        return relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
     
 class STCrossTransformer(nn.Module):
     """ Vision Transformer with support for patch or hybrid CNN input stage
@@ -685,16 +780,25 @@ class STCrossTransformer(nn.Module):
         self.embed_dim = embed_dim  # num_features for consistency with other models
         self.tubelet_size = tubelet_size
         self.composition = composition
-        self.patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim, num_frames=all_frames, tubelet_size=self.tubelet_size)
-        num_patches = self.patch_embed.num_patches
         
         scale = embed_dim ** -0.5
-        self.clip_conv1 = nn.Conv2d(in_channels=3, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size, bias=False)
-        self.clip_class_embedding = nn.Parameter(scale * torch.randn(embed_dim))
-        self.clip_positional_embedding = nn.Parameter(scale * torch.randn((img_size // patch_size) ** 2 + 1, embed_dim))
-        self.clip_ln_pre = LayerNorm(embed_dim)
+        self.clip_patch_embed = EVA_PatchEmbed(img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
+        num_patches = self.clip_patch_embed.num_patches
+        self.clip_cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.clip_pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        
+        half_head_dim = embed_dim // num_heads // 2
+        hw_seq_len = img_size // patch_size
+        self.clip_rope = VisionRotaryEmbeddingFast(
+                dim=half_head_dim,
+                pt_seq_len=16,
+                ft_seq_len=hw_seq_len
+                # patch_dropout=patch_dropout
+            )
 
+        ########################################### temporal path ####################################################
+        self.patch_embed = PatchEmbed(
+            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim, num_frames=all_frames, tubelet_size=self.tubelet_size)
         self.pos_embed = get_3d_sincos_pos_embed(
             embed_dim=embed_dim,
             grid_size=self.patch_embed.num_patches_h,
@@ -702,13 +806,15 @@ class STCrossTransformer(nn.Module):
 
         self.pos_drop = nn.Dropout(p=drop_rate)
 
+        #################################################################################################################
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         self.blocks = nn.ModuleList([
             Block(
                 dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
                 drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,
-                init_values=init_values, num_layer=i)
+                init_values=init_values, window_size=self.clip_patch_embed.patch_shape,
+                xattn=False, rope=self.clip_rope, postnorm=False, subln=True, naiveswiglu=True)
             for i in range(depth)])
         
         self.clip_ln_post = LayerNorm(embed_dim)
@@ -787,14 +893,11 @@ class STCrossTransformer(nn.Module):
         B = x.shape[0]
         s_x = x[:, :, 1::2, :, :] # pick even frames (8 frame)
         ######################## AIM spatial path #########################
-        s_t = s_x.shape[2]
         s_x = rearrange(s_x, 'b c t h w -> (b t) c h w')
-        s_x = self.clip_conv1(s_x) # shape = [*, embeddim, grid, grid]
-        s_x = s_x.reshape(s_x.shape[0], s_x.shape[1], -1) # [*, embeddim, grid**2]
-        s_x = s_x.permute(0, 2, 1) # shape[batch, patchnum, embeddim]
-        s_x = torch.cat([self.clip_class_embedding.to(s_x.dtype) + torch.zeros(s_x.shape[0], 1, s_x.shape[-1], dtype=s_x.dtype, device=s_x.device), s_x], dim=1)
-        s_x = s_x + self.clip_positional_embedding.to(s_x.dtype)
-        s_x = self.clip_ln_pre(s_x)
+        s_x = self.clip_patch_embed(s_x)
+        cls_tokens = self.clip_cls_token.expand(B*8, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        s_x = torch.cat((cls_tokens, s_x), dim=1)
+        s_x = s_x + self.clip_pos_embed
         #####################################################################
         
         ######################## VMAE spatial path #########################
@@ -805,10 +908,8 @@ class STCrossTransformer(nn.Module):
         t_x = self.pos_drop(t_x)
         #####################################################################
         
-        s_x = s_x.permute(1,0,2)
         for blk in self.blocks:
             s_x, t_x = blk(s_x, t_x)
-        s_x = s_x.permute(1,0,2)
         
         s_x = rearrange(s_x, '(b t) n d -> b t n d', b=B)
         s_x = self.clip_ln_post(s_x[:,:,0,:].mean(1)) # all cls tokens avg pooling
@@ -834,7 +935,7 @@ class STCrossTransformer(nn.Module):
 
 
 @register_model
-def bidir_vit_mvd_base_patch16_224(pretrained=False, **kwargs):
+def bidir_vit_evamvd_base_patch16_224(pretrained=False, **kwargs):
     model = STCrossTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), composition=False, **kwargs)
@@ -842,7 +943,7 @@ def bidir_vit_mvd_base_patch16_224(pretrained=False, **kwargs):
     return model
 
 @register_model
-def compo_bidir_mvd_vit_base_patch16_224(pretrained=False, **kwargs):
+def compo_bidir_evamvd_vit_base_patch16_224(pretrained=False, **kwargs):
     model = STCrossTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), composition=True, **kwargs)

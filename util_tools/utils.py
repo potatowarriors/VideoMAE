@@ -385,11 +385,11 @@ def load_bidir_weights(model, args):
             
     # add new code for load clip weight
     for key in clip_all_keys:
-        if key.startswith('transformer.'):
-            if key[23] == '.':
-                new_dict['blocks.'+ key[22] + '.clip_' + key[24:]] = checkpoint_clip[key]
+        if key.startswith('blocks.'):
+            if key[8] == '.':
+                new_dict['blocks.'+ key[7] + '.clip_' + key[9:]] = checkpoint_clip[key]
             else : # layer10 ~ 11 process
-                new_dict['blocks.'+ key[22:24] + '.clip_' + key[25:]] = checkpoint_clip[key]
+                new_dict['blocks.'+ key[7:9] + '.clip_' + key[10:]] = checkpoint_clip[key]
         else:
             new_dict['clip_' + key] = checkpoint_clip[key]
             

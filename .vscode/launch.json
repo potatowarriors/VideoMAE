@@ -15,7 +15,7 @@
                     "--nproc_per_node", "1",
                     "--master_port", "12331",
                     "/data/kide004/repos/VideoMAE/run_bidirection_compo.py",
-                    "--vmae_model", "compo_bidir_mvd_vit_base_patch16_224",
+                    "--vmae_model", "compo_bidir_evamvd_vit_base_patch16_224",
                     "--data_set", "EPIC",
                     "--nb_classes", "300",
                     "--data_path", "/local_datasets/Epickitchens100_clips/video",
