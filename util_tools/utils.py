@@ -356,9 +356,9 @@ def load_bidir_weights(model, args):
 
     print("Load VideoMAE ckpt from %s" % args.vmae_finetune)
     checkpoint_model = None
-    clip_checkpoint = torch.jit.load(args.clip_finetune, map_location='cpu')
+    clip_checkpoint = torch.load(args.clip_finetune, map_location='cpu')
     print("Load CLIP ckpt from %s" % args.clip_finetune)
-    checkpoint_clip = clip_checkpoint.visual.state_dict()
+    checkpoint_clip = clip_checkpoint['module']
     for model_key in args.model_key.split('|'):
         if model_key in checkpoint:
             checkpoint_model = checkpoint[model_key]
