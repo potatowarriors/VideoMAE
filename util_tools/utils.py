@@ -578,7 +578,63 @@ def load_vmaex2_bidir_weights(model ,args):
             new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
             checkpoint_model['pos_embed'] = new_pos_embed
 
-    load_state_dict(model, checkpoint_model, prefix=args.model_prefix)        
+    load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
+    
+def load_clipx2_bidir_weights(model ,args):
+    clip_checkpoint = torch.jit.load(args.clip_finetune, map_location='cpu')
+    print("Load CLIP ckpt from %s" % args.clip_finetune)
+    checkpoint_clip = clip_checkpoint.visual.state_dict()
+    state_dict = model.state_dict()
+
+    clip_all_keys = list(checkpoint_clip.keys())
+    new_dict = OrderedDict()
+            
+    # add new code for load clip weight
+    for key in clip_all_keys:
+        if key.startswith('transformer.'):
+            if key[23] == '.':
+                for i in range(1,3):
+                    new_dict['blocks.'+ key[22] + '.clip' + str(i) + '_' + key[24:]] = checkpoint_clip[key]
+            else : # layer10 ~ 11 process
+                for i in range(1,3):
+                    new_dict['blocks.'+ key[22:24] + '.clip' + str(i) + '_' + key[25:]] = checkpoint_clip[key]
+        else:
+            for i in range(1,3):
+                new_dict['clip' + str(i) + '_' + key] = checkpoint_clip[key]
+            
+    # load로 불러온 pre-trained weight를 new_dict에 담아주고
+    checkpoint_model = new_dict
+
+    # interpolate position embedding
+    if 'pos_embed' in checkpoint_model:
+        pos_embed_checkpoint = checkpoint_model['pos_embed']
+        embedding_size = pos_embed_checkpoint.shape[-1] # channel dim
+        num_patches = model.patch_embed.num_patches # 
+        num_extra_tokens = model.pos_embed.shape[-2] - num_patches # 0/1
+
+        # height (== width) for the checkpoint position embedding
+        orig_size = int(((pos_embed_checkpoint.shape[-2] - num_extra_tokens)//(args.num_frames // model.patch_embed.tubelet_size)) ** 0.5)
+        # height (== width) for the new position embedding
+        new_size = int((num_patches // (args.num_frames // model.patch_embed.tubelet_size) )** 0.5)
+        # class_token and dist_token are kept unchanged
+        if orig_size != new_size:
+            print("Position interpolate from %dx%d to %dx%d" % (orig_size, orig_size, new_size, new_size))
+            extra_tokens = pos_embed_checkpoint[:, :num_extra_tokens]
+            # only the position tokens are interpolated
+            pos_tokens = pos_embed_checkpoint[:, num_extra_tokens:]
+            # B, L, C -> BT, H, W, C -> BT, C, H, W
+            pos_tokens = pos_tokens.reshape(-1, args.num_frames // model.patch_embed.tubelet_size, orig_size, orig_size, embedding_size)
+            pos_tokens = pos_tokens.reshape(-1, orig_size, orig_size, embedding_size).permute(0, 3, 1, 2)
+            pos_tokens = torch.nn.functional.interpolate(
+                pos_tokens, size=(new_size, new_size), mode='bicubic', align_corners=False)
+            # BT, C, H, W -> BT, H, W, C ->  B, T, H, W, C
+            pos_tokens = pos_tokens.permute(0, 2, 3, 1).reshape(-1, args.num_frames // model.patch_embed.tubelet_size, new_size, new_size, embedding_size) 
+            pos_tokens = pos_tokens.flatten(1, 3) # B, L, C
+            new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
+            checkpoint_model['pos_embed'] = new_pos_embed
+
+    load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
+
 
 def load_clip_weights(model,load_path: str) -> Dict[str, torch.Tensor]:
     clip_model = torch.jit.load(load_path, map_location='cpu')
