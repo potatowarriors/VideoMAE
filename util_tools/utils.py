@@ -358,7 +358,7 @@ def load_bidir_weights(model, args):
     checkpoint_model = None
     clip_checkpoint = torch.load(args.clip_finetune, map_location='cpu')
     print("Load CLIP ckpt from %s" % args.clip_finetune)
-    checkpoint_clip = clip_checkpoint['module']
+    checkpoint_clip = clip_checkpoint
     for model_key in args.model_key.split('|'):
         if model_key in checkpoint:
             checkpoint_model = checkpoint[model_key]
@@ -385,13 +385,13 @@ def load_bidir_weights(model, args):
             
     # add new code for load clip weight
     for key in clip_all_keys:
-        if key.startswith('blocks.'):
-            if key[8] == '.':
-                new_dict['blocks.'+ key[7] + '.clip_' + key[9:]] = checkpoint_clip[key]
+        if key.startswith('visual.blocks.'):
+            if key[15] == '.':
+                new_dict['blocks.'+ key[14] + '.clip_' + key[16:]] = checkpoint_clip[key]
             else : # layer10 ~ 11 process
-                new_dict['blocks.'+ key[7:9] + '.clip_' + key[10:]] = checkpoint_clip[key]
-        else:
-            new_dict['clip_' + key] = checkpoint_clip[key]
+                new_dict['blocks.'+ key[14:16] + '.clip_' + key[17:]] = checkpoint_clip[key]
+        elif key.startswith('visual.'):
+            new_dict['clip_' + key[7:]] = checkpoint_clip[key]
             
     # load로 불러온 pre-trained weight를 new_dict에 담아주고
     checkpoint_model = new_dict

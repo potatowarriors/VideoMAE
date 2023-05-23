@@ -21,7 +21,7 @@
                     "--data_path", "/local_datasets/Epickitchens100_clips/video",
                     "--anno_path", "/data/kide004/repos/VideoMAE/dataset/epic",
                     "--vmae_finetune", "/data/kide004/repos/VideoMAE/pre-trained/mvd_b_from_b_ckpt_399.pth",
-                    "--clip_finetune", "/data/kide004/repos/VideoMAE/pre-trained/eva02_B_pt_in21k_p14to16.pt",
+                    "--clip_finetune", "/data/kide004/repos/VideoMAE/pre-trained/EVA02_CLIP_B_psz16_s8B.pt",
                     "--log_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
                     "--output_dir", "/data/kide004/repos/VideoMAE/train_sh/debug",
                     "--batch_size", "6",
