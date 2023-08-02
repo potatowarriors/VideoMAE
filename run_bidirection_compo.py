@@ -21,7 +21,7 @@ from dataset.datasets import build_dataset
 from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, load_origvit_bidir_weights, unfreeze_block
 from util_tools.utils import multiple_samples_collate, notice_message, laod_eval_weights
 import util_tools.utils as utils
-import videomae_models.bidir_modeling_crossattn, videomae_models.bidir_vit_modeling_crossattn, videomae_models.bidir_modeling_crossattn_timesformer
+import videomae_models.bidir_modeling_crossattn, videomae_models.bidir_vit_modeling_crossattn
 
 
 def get_args():

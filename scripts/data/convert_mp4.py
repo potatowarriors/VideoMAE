@@ -5,6 +5,7 @@ import os
 import os.path as osp
 import sys
 from multiprocessing import Pool
+import subprocess
 
 
 def resize_videos(vid_item, args):
@@ -45,7 +46,8 @@ def resize_videos(vid_item, args):
                f'{"-vsync vfr" if args.remove_dup else ""} '
                f'-c:v libx264 {"-g 16" if args.dense else ""} '
                f'-an {out_full_path} -y')
-    os.popen(cmd)
+    process = subprocess.Popen(cmd, shell=True)
+    process.wait()
     print(f'{vid_path} done')
     sys.stdout.flush()
     return True
@@ -78,8 +80,8 @@ def parse_args():
     parser.add_argument(
         '--ext',
         type=str,
-        default='mp4',
-        choices=['avi', 'mp4', 'webm', 'mkv'],
+        default='MP4',
+        choices=['avi', 'MP4', 'webm', 'mkv'],
         help='video file extensions')
     parser.add_argument(
         '--to-mp4',

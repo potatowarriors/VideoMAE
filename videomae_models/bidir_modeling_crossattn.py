@@ -173,10 +173,11 @@ class Attention(nn.Module):
     
 # spatial to temporal cross attention module.
 class CrossAttentionS2T(nn.Module):
-    def __init__(self, dim: int, n_head: int, attn_mask: torch.Tensor = None):
+    def __init__(self, dim: int, n_head: int, num_frames: int, attn_mask: torch.Tensor = None):
         super().__init__()
 
         # add for cross-attn
+        self.num_frames = num_frames
         self.num_head = n_head
         head_dim = dim // self.num_head
         self.scale = head_dim ** -0.5
@@ -196,10 +197,11 @@ class CrossAttentionS2T(nn.Module):
     
     def s2t_cross_attn(self, s_x, t_x): # s_x=[n (b t) d], t_x=[b n d]
         B, _, _ = t_x.shape
+        t = s_x.shape[1] // t_x.shape[0]
         s_x_pat = s_x[1:, :, :]
         s_x_pat = rearrange(s_x_pat, 'n b d -> b n d') # batch -> token
         s_x_pat = s_x_pat + self.clip_space_pos
-        t_x = rearrange(t_x, 'b (t n) d -> (b t) n d', t=8)
+        t_x = rearrange(t_x, 'b (t n) d -> (b t) n d', t=t)
         t_x = t_x + self.vmae_space_pos
         s2t_q_bias = self.s2t_q_bias
         s2t_kv_bias = self.s2t_kv_bias
@@ -227,15 +229,16 @@ class CrossAttentionS2T(nn.Module):
 
 # this codes from CLIP github(https://github.com/openai/CLIP)
 class CrossAttentionT2S(nn.Module):
-    def __init__(self, dim: int, n_head: int, attn_mask: torch.Tensor = None):
+    def __init__(self, dim: int, n_head: int, num_frames: int, attn_mask: torch.Tensor = None):
         super().__init__()
 
+        self.num_frames = num_frames
         self.num_head = n_head
         head_dim = dim // self.num_head
         self.scale = head_dim ** -0.5
         all_head_dim = head_dim * self.num_head
-        self.clip_time_pos = nn.Parameter(self.scale * torch.randn((8, dim)))
-        self.vmae_time_pos = nn.Parameter(self.scale * torch.randn((8, dim))) #왠지 original vmae에 nosie가 되는거같다 끄고 해보자.
+        self.clip_time_pos = nn.Parameter(self.scale * torch.randn((num_frames//2, dim)))
+        self.vmae_time_pos = nn.Parameter(self.scale * torch.randn((num_frames//2, dim))) #왠지 original vmae에 nosie가 되는거같다 끄고 해보자.
         
         self.t2s_q = nn.Linear(dim, all_head_dim, bias=False) # 197 tokens(cls+patch) * num_frames
         self.t2s_q_bias = nn.Parameter(torch.zeros(all_head_dim))
@@ -248,10 +251,11 @@ class CrossAttentionT2S(nn.Module):
     
     def t2s_cross_attn(self, s_x, t_x): # s_x=[n (b t) d], t_x=[b n d]
         B, _, _ = t_x.shape
+        t = s_x.shape[1] // t_x.shape[0]
         s_x_cls, s_x_pat = s_x[0, :, :], s_x[1:, :, :]
         s_x_pat = rearrange(s_x_pat, 'n (b t) d -> (b n) t d', b=B) # batch -> token
         s_x_pat = s_x_pat + self.clip_time_pos
-        t_x = rearrange(t_x, 'b (t n) d -> (b n) t d', t=8)
+        t_x = rearrange(t_x, 'b (t n) d -> (b n) t d', t=t)
         t_x = t_x + self.vmae_time_pos
         t2s_q_bias = self.t2s_q_bias
         t2s_kv_bias = self.t2s_kv_bias
@@ -280,7 +284,7 @@ class CrossAttentionT2S(nn.Module):
     
 class Block(nn.Module):
 
-    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
+    def __init__(self, dim, num_heads, num_frames=16, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
                  drop_path=0., init_values=None, num_layer=0, act_layer=nn.GELU, norm_layer=nn.LayerNorm, attn_head_dim=None):
         super().__init__()
         self.num_layer = num_layer
@@ -310,8 +314,8 @@ class Block(nn.Module):
         self.cross_t_down = nn.Linear(dim, dim//2)
         self.ln_s_cross = norm_layer(dim//2)
         self.ln_t_cross = norm_layer(dim//2)
-        self.t2s_cross = CrossAttentionT2S(dim//2, n_head=num_heads)
-        self.s2t_cross = CrossAttentionS2T(dim//2, n_head=num_heads)
+        self.t2s_cross = CrossAttentionT2S(dim//2, num_heads, num_frames)
+        self.s2t_cross = CrossAttentionS2T(dim//2, num_heads, num_frames)
         self.cross_s_up = nn.Linear(dim//2, dim)
         self.cross_t_up = nn.Linear(dim//2, dim)
         ###########################################################################################
@@ -402,6 +406,7 @@ class STCrossTransformer(nn.Module):
                  pretrained_cfg = None):
         super().__init__()
         self.num_classes = num_classes
+        self.num_frames = all_frames
         self.embed_dim = embed_dim  # num_features for consistency with other models
         self.tubelet_size = tubelet_size
         self.composition = composition
@@ -427,7 +432,7 @@ class STCrossTransformer(nn.Module):
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         self.blocks = nn.ModuleList([
             Block(
-                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                dim=embed_dim, num_heads=num_heads, num_frames=self.num_frames, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
                 drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer,
                 init_values=init_values, num_layer=i)
             for i in range(depth)])
@@ -506,7 +511,7 @@ class STCrossTransformer(nn.Module):
 
     def forward_features(self, x):
         B = x.shape[0]
-        s_x = x[:, :, 1::2, :, :] # pick even frames (8 frame)
+        s_x = x[:, :, 1::2, :, :] # pick even frames
         ######################## AIM spatial path #########################
         s_t = s_x.shape[2]
         s_x = rearrange(s_x, 'b c t h w -> (b t) c h w')

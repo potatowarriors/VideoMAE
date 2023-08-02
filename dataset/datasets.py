@@ -61,17 +61,17 @@ def build_dataset(is_train, test_mode, args):
         anno_path = None
         if is_train is True:
             mode = 'train'
-            anno_path = os.path.join(args.data_path, 'train.csv')
+            anno_path = os.path.join(args.anno_path, 'kinetics400_train_list_videos.csv')
         elif test_mode is True:
             mode = 'test'
-            anno_path = os.path.join(args.data_path, 'test.csv') 
+            anno_path = os.path.join(args.anno_path, 'kinetics400_val_list_videos.csv') 
         else:  
             mode = 'validation'
-            anno_path = os.path.join(args.data_path, 'val.csv') 
+            anno_path = os.path.join(args.anno_path, 'kinetics400_val_list_videos.csv') 
 
         dataset = VideoClsDataset(
             anno_path=anno_path,
-            data_path='/',
+            data_path=args.data_path,
             mode=mode,
             clip_len=args.num_frames,
             frame_sample_rate=args.sampling_rate,
@@ -116,36 +116,6 @@ def build_dataset(is_train, test_mode, args):
             new_width=320,
             args=args)
         nb_classes = 174
-    
-    elif args.data_set =='MINI_SSV2':
-        mode = None
-        anno_path = None
-        if is_train is True:
-            mode = 'train'
-            anno_path = os.path.join(args.data_path, 'mini_train_mp4.csv')
-        elif test_mode is True:
-            mode = 'test'
-            anno_path = os.path.join(args.data_path, 'mini_test_mp4.csv')
-        else:
-            mode = 'validation'
-            anno_path = os.path.join(args.data_path, 'mini_val_mp4.csv')
-
-        dataset = SSVideoClsDataset(
-                anno_path=anno_path,
-                data_path='/',
-                mode=mode,
-                clip_len=1,
-                num_segment=args.num_frames,
-                test_num_segment=args.test_num_segment,
-                test_num_crop=args.test_num_crop,
-                num_crop=1 if not test_mode else 3,
-                keep_aspect_ratio=True,
-                crop_size=args.input_size,
-                short_side_size=args.short_side_size,
-                new_height=256,
-                new_width=320,
-                args=args)
-        nb_classes = 87
         
     elif args.data_set == 'EPIC':
         mode = None
