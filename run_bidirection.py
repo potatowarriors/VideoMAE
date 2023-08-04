@@ -21,8 +21,7 @@ from dataset.datasets import build_dataset
 from util_tools.utils import NativeScalerWithGradNormCount as NativeScaler, load_bidir_weights, unfreeze_block
 from util_tools.utils import cross_multiple_samples_collate, notice_message, laod_eval_weights
 import util_tools.utils as utils
-import clip_models.clip as clip
-import videomae_models.bidir_modeling_crossattn
+import videomae_models.bidir_modeling_crossattn, videomae_models.reviewer_bidir_modeling_crossattn
 
 
 def get_args():
@@ -46,7 +45,8 @@ def get_args():
                         help='Attention dropout rate (default: 0.)')
     parser.add_argument('--drop_path', type=float, default=0.1, metavar='PCT',
                         help='Drop path rate (default: 0.1)')
-
+    parser.add_argument('--head_drop_rate', type=float, default=0.0, metavar='PCT',
+                        help='Dropout rate for head (default: 0.)')
     parser.add_argument('--disable_eval_during_finetuning', action='store_true', default=False)
     parser.add_argument('--model_ema', action='store_true', default=False)
     parser.add_argument('--model_ema_decay', type=float, default=0.9999, help='')
